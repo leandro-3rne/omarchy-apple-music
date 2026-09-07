@@ -1,0 +1,438 @@
+#!/bin/bash
+# Minimal window/launch helper for the Apple Music bar plugin. Everything
+# else (MPRIS metadata, playback control, theming) comes for free from
+# Chromium's MPRIS bridge and Omarchy's system-wide browser theme policy, so
+# this script only has to know how to find or start the dedicated Chromium
+# window, how to show and hide it, and how to shut it down on removal.
+set -euo pipefail
+
+APPLE_MUSIC_URL="https://music.apple.com"
+PLUGIN_ID="io.github.leandro-3rne.apple-music"
+DATA_DIR="${XDG_DATA_HOME:-$HOME/.local/share}/leandro-3rne-apple-music"
+PROFILE_DIR="$DATA_DIR/chromium"
+# Keep enough of the original cover for the large, high-resolution player art.
+ART_MAX_BYTES=$((8 * 1024 * 1024))
+SPECIAL_WORKSPACE="special:AM"
+# Resolved once at startup, while the plugin folder is still known to be
+# there: quit_window checks this path later, after removal may have taken
+# the folder away.
+PLUGIN_DIR="$(dirname -- "${BASH_SOURCE[0]}")"
+
+# --class is ignored by Chromium in --app mode: the window reports a
+# generic class like "chrome-music.apple.com__-Default" regardless, and
+# that generic class isn't unique if another Apple Music plugin using the
+# same URL is also installed. Identify our window by process instead:
+# every process launched with our --user-data-dir shares that flag
+# (including Chromium's zygote/gpu/renderer children), so the one *without*
+# a --type= argument is the top-level browser process that owns the window.
+browser_pid() {
+  local candidate
+  for candidate in $(pgrep -f -- "--user-data-dir=$PROFILE_DIR" 2>/dev/null); do
+    if ! tr '\0' '\n' <"/proc/$candidate/cmdline" 2>/dev/null | grep -q '^--type='; then
+      printf '%s\n' "$candidate"
+      return 0
+    fi
+  done
+  return 1
+}
+
+# Emits {"open":bool,"address":string,"pid":number,"workspace":string} for
+# our dedicated window, or open:false if it isn't running.
+state() {
+  local pid clients
+  pid=$(browser_pid || true)
+  if [[ -z $pid ]]; then
+    jq -cn '{open:false,address:"",pid:0,workspace:""}'
+    return
+  fi
+
+  clients=$(hyprctl -j clients 2>/dev/null) || clients="[]"
+  jq -cn --argjson pid "$pid" --argjson clients "$clients" '
+    (first($clients[] | select(.pid == $pid)) // null) as $c |
+    {
+      open: ($c != null),
+      address: ($c.address // ""),
+      pid: $pid,
+      workspace: ($c.workspace.name // "")
+    }
+  '
+}
+
+launch() {
+  command -v chromium >/dev/null 2>&1 || { echo "chromium not found" >&2; exit 1; }
+  # The profile holds the signed-in session, so it is only ever created at the
+  # real location — never through a link standing in for it.
+  if [[ -L $DATA_DIR ]]; then
+    echo "refusing to launch: $DATA_DIR is a symlink" >&2
+    exit 1
+  fi
+  mkdir -p "$PROFILE_DIR"
+  exec uwsm-app -- chromium \
+    --user-data-dir="$PROFILE_DIR" \
+    --app="$APPLE_MUSIC_URL" \
+    --no-first-run
+}
+
+# Pops the window onto the currently active workspace and focuses it.
+# Classic dispatch strings ("movetoworkspace ...") are not reliably honored
+# by this Hyprland build, whether issued via the hyprctl CLI or Quickshell's
+# Hyprland.dispatch(); hl.dsp.* via `hyprctl eval` is the mechanism that
+# does work, so this always goes through eval, even when the window is
+# already visible — moving it onto the workspace it is already on is a
+# harmless no-op, and it keeps this one code path in charge of "show".
+#
+# hl.dsp.focus() warps the pointer to the target window as a side effect, so
+# this saves the cursor position first and restores it after — otherwise
+# every right-click yanks your mouse over to wherever the window ends up.
+show_window() {
+  local address=$1
+  [[ $address =~ ^0x[0-9a-fA-F]+$ ]] || { echo "invalid address: $address" >&2; exit 2; }
+  hyprctl eval "
+    local w = \"address:$address\"
+    local cursor = hl.get_cursor_pos()
+    local ws = hl.get_active_workspace()
+    if ws and ws.name then
+      hl.dispatch(hl.dsp.window.move({ window = w, workspace = ws.name, follow = false }))
+    end
+    hl.dispatch(hl.dsp.focus({ window = w }))
+    if cursor and cursor.x and cursor.y then
+      hl.dispatch(hl.dsp.cursor.move({ x = math.floor(cursor.x), y = math.floor(cursor.y) }))
+    end
+  "
+}
+
+# Parks the window on a hidden workspace instead of closing it — playback
+# and the signed-in session keep going, same idea as minimizing. Restores
+# cursor position too, defensively matching show_window, in case moving a
+# window across workspaces has the same pointer-warping side effect.
+hide_window() {
+  local address=$1
+  [[ $address =~ ^0x[0-9a-fA-F]+$ ]] || { echo "invalid address: $address" >&2; exit 2; }
+  hyprctl eval "
+    local cursor = hl.get_cursor_pos()
+    hl.dispatch(hl.dsp.window.move({ window = \"address:$address\", workspace = \"$SPECIAL_WORKSPACE\", follow = false }))
+    if cursor and cursor.x and cursor.y then
+      hl.dispatch(hl.dsp.cursor.move({ x = math.floor(cursor.x), y = math.floor(cursor.y) }))
+    end
+  "
+}
+
+# The bar icon's one right-click action: launch if not running, hide if our
+# window is sitting on the workspace the user is currently looking at,
+# otherwise bring it into view. This only ever acts on our own window's
+# address, never on whatever window happens to be active.
+#
+# Checks the *workspace* the window is on, not which window currently has
+# input focus (e.g. via `hyprctl activewindow`). Omarchy runs with
+# input:follow_mouse enabled, so the pointer travelling from the Apple Music
+# window to the bar icon crosses other windows on the way and steals focus
+# before the click is even processed — "was it focused a moment ago" isn't a
+# question a script can answer reliably under that setting. Which workspace
+# is active isn't affected by the pointer merely hovering another window on
+# the same output, so it stays an accurate proxy for "is the user looking at
+# this window right now."
+toggle_window() {
+  local current addr workspace active_ws
+  current=$(state)
+  if [[ $(jq -r '.open' <<<"$current") != "true" ]]; then
+    launch
+    return
+  fi
+
+  addr=$(jq -r '.address' <<<"$current")
+  workspace=$(jq -r '.workspace' <<<"$current")
+
+  if [[ $workspace == "$SPECIAL_WORKSPACE" ]]; then
+    show_window "$addr"
+    return
+  fi
+
+  active_ws=$(hyprctl -j activeworkspace 2>/dev/null | jq -r '.name // empty')
+  if [[ -n $active_ws && $workspace == "$active_ws" ]]; then
+    hide_window "$addr"
+  else
+    show_window "$addr"
+  fi
+}
+
+# Copies the cover art the browser is advertising into this plugin's own
+# runtime directory, and prints the copy's path. `clear` removes any copy
+# left behind instead.
+#
+# Both sides of this are held open rather than named twice. The source is
+# opened once and judged on that descriptor — regular file, size, and image
+# format from its leading bytes. The destination directory is opened without
+# following its final component and confirmed on its descriptor to be ours
+# and private; that same descriptor is then what the old copy is removed
+# through and the new one created under, so a directory substituted after the
+# check is not the one being written to.
+#
+# It lives under $XDG_RUNTIME_DIR: owner-only, per-session, and cleared when
+# the session ends. If that is unavailable this does nothing rather than
+# falling back to somewhere persistent, and the popover shows its placeholder.
+art_helper() {
+  command -v python3 >/dev/null 2>&1 || return 1
+  python3 - "$ART_MAX_BYTES" "$@" <<'PY'
+import os
+import re
+import secrets
+import stat
+import sys
+
+ceiling = int(sys.argv[1])
+mode = sys.argv[2]
+PREFIX = "art."
+SNAPSHOT_NAME = re.compile(r"^art\.[0-9a-f]{16}$")
+BASE = "leandro-3rne-apple-music"
+ART = "art"
+
+
+def open_dir(name, parent_fd=None, repair=False):
+    """Open a directory without following its final component, then judge it
+    by the descriptor: a real directory, owned by us, closed to everyone
+    else. `repair` tightens a directory of ours that a umask left loose."""
+    flags = os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW
+    if parent_fd is None:
+        fd = os.open(name, flags)
+    else:
+        fd = os.open(name, flags, dir_fd=parent_fd)
+    try:
+        info = os.fstat(fd)
+        if not stat.S_ISDIR(info.st_mode) or info.st_uid != os.getuid():
+            raise OSError("not an owned directory")
+        if info.st_mode & 0o077:
+            if not repair:
+                raise OSError("directory is not private")
+            os.fchmod(fd, 0o700)
+            if os.fstat(fd).st_mode & 0o077:
+                raise OSError("directory could not be made private")
+    except Exception:
+        os.close(fd)
+        raise
+    return fd
+
+
+def make_dir(name, parent_fd):
+    try:
+        os.mkdir(name, 0o700, dir_fd=parent_fd)
+    except FileExistsError:
+        pass
+    return open_dir(name, parent_fd, repair=True)
+
+
+runtime = os.environ.get("XDG_RUNTIME_DIR", "")
+# A trailing slash makes the final component a directory reference rather than
+# a name, and O_NOFOLLOW then has nothing to refuse — so it is taken off
+# before that path is ever opened.
+runtime = runtime.rstrip("/") or "/"
+if not runtime.startswith("/"):
+    sys.exit(1)
+
+try:
+    # Never repaired: the session owns this one, we only decline to use it.
+    runtime_fd = open_dir(runtime)
+except OSError:
+    sys.exit(1)
+
+base_fd = art_fd = None
+try:
+    if mode == "clear":
+        try:
+            base_fd = open_dir(BASE, runtime_fd, repair=True)
+            art_fd = open_dir(ART, base_fd, repair=True)
+        except OSError:
+            sys.exit(0)
+    else:
+        try:
+            base_fd = make_dir(BASE, runtime_fd)
+            art_fd = make_dir(ART, base_fd)
+        except OSError:
+            # Something other than our own private directory is sitting at
+            # that name; leave it alone and go without artwork.
+            sys.exit(1)
+
+    # Only ever removes names this plugin writes, so nothing another program
+    # put here is touched. A directory cannot be unlinked, so one wearing our
+    # naming is taken away as a directory instead of being left to block the
+    # tidy-up below.
+    for name in os.listdir(art_fd):
+        if not SNAPSHOT_NAME.match(name):
+            continue
+        try:
+            os.unlink(name, dir_fd=art_fd)
+        except IsADirectoryError:
+            try:
+                os.rmdir(name, dir_fd=art_fd)
+            except OSError:
+                pass
+        except OSError:
+            pass
+
+    if mode == "clear":
+        os.close(art_fd)
+        art_fd = None
+        try:
+            os.rmdir(ART, dir_fd=base_fd)
+        except OSError:
+            pass
+        os.close(base_fd)
+        base_fd = None
+        try:
+            os.rmdir(BASE, dir_fd=runtime_fd)
+        except OSError:
+            pass
+        sys.exit(0)
+
+    src = sys.argv[3]
+    try:
+        src_fd = os.open(src, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK)
+    except OSError:
+        sys.exit(1)
+    try:
+        info = os.fstat(src_fd)
+        if not stat.S_ISREG(info.st_mode):
+            sys.exit(1)
+        if info.st_size <= 0 or info.st_size > ceiling:
+            sys.exit(1)
+        chunks, total = [], 0
+        while total <= ceiling:
+            chunk = os.read(src_fd, 65536)
+            if not chunk:
+                break
+            chunks.append(chunk)
+            total += len(chunk)
+    finally:
+        os.close(src_fd)
+
+    data = b"".join(chunks)
+    if not data or len(data) > ceiling:
+        sys.exit(1)
+    if not (data.startswith(b"\x89PNG\r\n\x1a\n")
+            or data.startswith(b"\xff\xd8\xff")
+            or data[:6] in (b"GIF87a", b"GIF89a")
+            or (data[:4] == b"RIFF" and data[8:12] == b"WEBP")):
+        sys.exit(1)
+
+    name = PREFIX + secrets.token_hex(8)
+    out_fd = os.open(name, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW,
+                     0o600, dir_fd=art_fd)
+    try:
+        os.fchmod(out_fd, 0o600)
+        written = 0
+        while written < len(data):
+            written += os.write(out_fd, data[written:])
+    finally:
+        os.close(out_fd)
+
+    sys.stdout.write(os.path.join(runtime, BASE, ART, name))
+finally:
+    for fd in (art_fd, base_fd, runtime_fd):
+        if fd is not None:
+            try:
+                os.close(fd)
+            except OSError:
+                pass
+PY
+}
+
+snapshot_art() {
+  local src=$1
+  [[ $src =~ ^/tmp/\.org\.chromium\.Chromium\.[A-Za-z0-9]+$ ]] || return 1
+  art_helper snapshot "$src"
+}
+
+clear_art() {
+  art_helper clear >/dev/null 2>&1 || true
+}
+
+# Asks the browser to close and waits for every process on this profile to
+# actually exit. Chromium writes its profile out on the way down, so deleting
+# the profile before those writes finish would leave part of it behind; the
+# wait is what makes a removal come out clean. SIGTERM rather than SIGKILL, so
+# it shuts down and flushes normally instead of being left in a crashed state.
+stop_browser() {
+  local pid attempt
+  pid=$(browser_pid || true)
+  if [[ -n $pid ]]; then
+    kill "$pid" 2>/dev/null || true
+  fi
+  for attempt in {1..100}; do
+    pgrep -f -- "--user-data-dir=$PROFILE_DIR" >/dev/null 2>&1 || return 0
+    sleep 0.1
+  done
+}
+
+# Close the dedicated Apple Music browser immediately. SIGTERM cannot be
+# cancelled by the page's beforeunload handler, but unlike SIGKILL it still
+# gives Chromium its normal profile-shutdown path.
+close_window() {
+  stop_browser
+  clear_art
+}
+
+# Whether the shell still lists this plugin as enabled.
+plugin_still_enabled() {
+  local listing
+  listing=$(omarchy-shell shell listPlugins 2>/dev/null) || return 1
+  [[ -n $listing ]] || return 1
+  jq -e --arg id "$PLUGIN_ID" 'any(.[]; .id == $id and .enabled == true)' \
+    <<<"$listing" >/dev/null 2>&1
+}
+
+# Shuts down the dedicated browser when the plugin's enabled state flips to
+# false (see Service.qml's handleDisabled), so a signed-in session doesn't
+# outlive the UI that was managing it.
+#
+# A disable and a removal both arrive here: `omarchy plugin remove` disables
+# the plugin first and deletes its folder immediately after. Waiting a beat and
+# then looking for that folder settles which one happened.
+quit_window() {
+  sleep 2
+
+  if [[ ! -e "$PLUGIN_DIR/manifest.json" ]]; then
+    # The plugin folder is gone: this was a removal, so the profile — the
+    # cache and signed-in session for this window — goes with it rather than
+    # being left behind with nothing to manage it. The delete is pinned to an
+    # absolute path that is this plugin's own data directory, and to a real
+    # directory rather than a link standing in for one, so neither an unset
+    # HOME nor a substituted path can point it somewhere else.
+    stop_browser
+    clear_art
+    if [[ $DATA_DIR == /*/leandro-3rne-apple-music && ! -L $DATA_DIR && -d $DATA_DIR ]]; then
+      rm -rf -- "$DATA_DIR"
+    fi
+    return 0
+  fi
+
+  # The folder is still there, so the plugin was switched off rather than
+  # removed: close the window but keep the profile, so toggling the plugin
+  # off and on doesn't cost the user their signed-in session. Confirmed
+  # against the shell first — a plugin that reports as enabled by now was
+  # never really switched off, and a window the user is still using should
+  # not be closed on the strength of a momentary reload.
+  if plugin_still_enabled; then
+    return 0
+  fi
+  stop_browser
+  clear_art
+}
+
+case ${1:-} in
+state) state ;;
+launch) launch ;;
+show)
+  (( $# == 2 )) || { echo "usage: $0 show <address>" >&2; exit 2; }
+  show_window "$2"
+  ;;
+toggle) toggle_window ;;
+close) close_window ;;
+quit) quit_window ;;
+art)
+  (( $# == 2 )) || { echo "usage: $0 art <path>" >&2; exit 2; }
+  snapshot_art "$2" || exit 1
+  ;;
+*)
+  echo "usage: $0 <state|launch|show|toggle|close|quit|art>" >&2
+  exit 2
+  ;;
+esac

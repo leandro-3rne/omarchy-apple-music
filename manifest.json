@@ -1,0 +1,23 @@
+{
+  "schemaVersion": 1,
+  "id": "io.github.leandro-3rne.apple-music",
+  "name": "Apple Music for Omarchy",
+  "version": "1.0.0",
+  "author": "leandro-3rne",
+  "license": "MIT",
+  "homepage": "https://github.com/leandro-3rne/omarchy-apple-music",
+  "description": "A native Omarchy now-playing panel for Apple Music with resilient high-resolution artwork lookup and window controls.",
+  "kinds": ["service", "bar-widget"],
+  "keepLoaded": true,
+  "entryPoints": {
+    "service": "Service.qml",
+    "barWidget": "BarWidget.qml"
+  },
+  "barWidget": {
+    "displayName": "Apple Music",
+    "description": "Now playing, transport controls, artwork, and the Apple Music window.",
+    "category": "Media",
+    "allowMultiple": false,
+    "defaultSection": "right"
+  }
+}
