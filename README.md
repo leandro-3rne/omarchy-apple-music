@@ -30,6 +30,8 @@ licensing. See [Credits](#credits) and [LICENSE](LICENSE).
 
 - Left-click opens a native now-playing panel with artwork, metadata, progress,
   and previous/play-pause/next controls.
+- The progress bar follows playback in real time and is interactive: click or
+  drag anywhere on it to seek to a different position in the current track.
 - Right-click opens or hides the real `music.apple.com` Chromium window.
 - Clicking the artwork or title always brings the player window into view.
 - Scrolling the bar icon changes track.
@@ -66,6 +68,8 @@ this repository.
 - Scroll: previous or next track.
 - Arrow keys: move through panel controls.
 - Enter/Space: activate the selected control.
+- Click or drag the progress bar: seek within the current track when Apple
+  Music reports that seeking is available.
 - Escape: close the panel.
 
 ## IPC
