@@ -182,6 +182,7 @@ Item {
 
   Component.onCompleted: Qt.callLater(function() {
     root.requestState("sync")
+    initialPositionReveal.restart()
     // Covers a start that already has a track loaded, where artCandidate is
     // set from the outset and so never changes to announce itself.
     root.snapshotArt()
@@ -240,6 +241,26 @@ Item {
   readonly property string rawTitle: activePlayer ? String(activePlayer.trackTitle || "") : ""
   readonly property string rawArtist: activePlayer ? String(activePlayer.trackArtist || "") : ""
   readonly property string rawAlbum: activePlayer ? String(activePlayer.trackAlbum || "") : ""
+  readonly property string positionIdentity: (activePlayer ? String(activePlayer.dbusName || "") : "")
+    + "\n" + rawTitle + "\n" + rawArtist
+  property bool positionReady: false
+
+  onPositionIdentityChanged: {
+    clearPendingSeek()
+    positionReady = false
+    initialPositionReveal.restart()
+  }
+
+  // A newly published Chromium media session commonly exposes duration and
+  // a temporary zero position in separate updates. Keep the slider hidden
+  // through that short initialization window so PanelSlider's 140ms fill
+  // animation cannot reveal a 0 -> current-position jump.
+  Timer {
+    id: initialPositionReveal
+    interval: 600
+    repeat: false
+    onTriggered: root.positionReady = !!root.activePlayer
+  }
 
   // Apple Music briefly clears its Media Session metadata between tracks.
   // Keep the last complete presentation while the dedicated application is
@@ -738,7 +759,17 @@ Item {
     var player = activePlayer
     var target = Number(seconds)
     if (!player || !player.canSeek || !isFinite(target)) return false
-    player.position = Math.max(0, Math.min(target, length > 0 ? length : target))
+    var clamped = Math.max(0, length > 0 ? Math.min(target, length) : target)
+    if (Math.abs(clamped - livePosition()) < 0.001) return false
+
+    // Apple Music's Chromium media session advertises relative seeking but
+    // ignores the requested offset and applies its own ~30-second jump. Its
+    // absolute SetPosition path does honor exact seconds, so every input is
+    // resolved to one absolute target here.
+    pendingSeekPosition = clamped
+    pendingSeekTimestamp = Date.now()
+    seekAckTimeout.restart()
+    player.position = clamped
     return true
   }
 
@@ -748,32 +779,56 @@ Item {
     return seekTo(livePosition() + delta)
   }
 
-  // MPRIS position is only pushed on seek/pause/resume, not continuously, so
-  // the popover interpolates between syncs while playing rather than
-  // polling for a live value.
-  property double positionAtSync: 0
-  property double syncTimestamp: 0
+  property double pendingSeekPosition: -1
+  property double pendingSeekTimestamp: 0
 
-  function syncPosition() {
-    positionAtSync = activePlayer ? Number(activePlayer.position || 0) : 0
-    syncTimestamp = Date.now()
+  function clearPendingSeek() {
+    pendingSeekPosition = -1
+    pendingSeekTimestamp = 0
+    seekAckTimeout.stop()
   }
 
   onActivePlayerChanged: {
-    syncPosition()
+    clearPendingSeek()
     refreshDisplayedMetadata()
   }
 
   Connections {
     target: root.activePlayer
-    function onPositionChanged() { root.syncPosition() }
-    function onIsPlayingChanged() { root.syncPosition() }
+    function onPositionChanged() {
+      if (!root.positionReady) root.initialPositionReveal.restart()
+      if (root.pendingSeekPosition < 0 || !root.activePlayer) return
+      var expected = root.pendingSeekPosition
+      if (root.activePlayer.isPlaying)
+        expected += (Date.now() - root.pendingSeekTimestamp) / 1000
+      var reported = Number(root.activePlayer.position || 0)
+      // Several wheel steps can be queued before Chromium replies. Ignore
+      // acknowledgements for older intermediate steps and only hand control
+      // back to MPRIS when it reaches the most recently requested position.
+      if (Math.abs(reported - expected) <= 3) root.clearPendingSeek()
+    }
+    function onIsPlayingChanged() {
+      if (root.pendingSeekPosition < 0) return
+      root.pendingSeekPosition = root.livePosition()
+      root.pendingSeekTimestamp = Date.now()
+    }
+  }
+
+  Timer {
+    id: seekAckTimeout
+    interval: 2000
+    repeat: false
+    onTriggered: root.clearPendingSeek()
   }
 
   function livePosition() {
     if (!activePlayer) return 0
-    var value = positionAtSync
-    if (activePlayer.isPlaying) value += (Date.now() - syncTimestamp) / 1000
+    // Quickshell's MPRIS wrapper already returns an interpolated live
+    // position. Re-interpolating that value here caused the two clocks to
+    // drift and made later seek calculations unreliable.
+    var value = pendingSeekPosition >= 0
+      ? pendingSeekPosition + (activePlayer.isPlaying ? (Date.now() - pendingSeekTimestamp) / 1000 : 0)
+      : Number(activePlayer.position || 0)
     return length > 0 ? Math.max(0, Math.min(value, length)) : Math.max(0, value)
   }
 

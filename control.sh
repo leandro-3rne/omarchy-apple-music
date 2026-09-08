@@ -31,9 +31,9 @@ apple_music_url() {
   fi
   storefront=${storefront,,}
   if [[ $storefront =~ ^[a-z]{2}$ ]]; then
-    printf '%s/%s/browse\n' "$APPLE_MUSIC_BASE_URL" "$storefront"
+    printf '%s/%s/home\n' "$APPLE_MUSIC_BASE_URL" "$storefront"
   else
-    printf '%s\n' "$APPLE_MUSIC_BASE_URL"
+    printf '%s/home\n' "$APPLE_MUSIC_BASE_URL"
   fi
 }
 

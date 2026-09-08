@@ -79,6 +79,8 @@ the isolated browser profile and is not written to the plugin repository.
 - Scroll: previous or next track.
 - Arrow keys: move through panel controls.
 - With the progress bar selected, Left/Right seeks backward/forward 5 seconds.
+- On the progress bar, scroll down to seek forward 5 seconds or scroll up to
+  seek backward 5 seconds.
 - Enter/Space: activate the selected control.
 - Click or drag the progress bar: seek within the current track when Apple
   Music reports that seeking is available.

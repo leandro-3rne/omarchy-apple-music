@@ -82,7 +82,7 @@ BarWidget {
     return root.hasMedia ? [0, 1, 2, 3, 4] : [4]
   }
 
-  function moveCursor(dx, dy) {
+  function moveCursor(dx, dy, autoRepeat) {
     if (dx === 0 && dy === 0) return
     var targets = root.cursorTargets()
     if (!root.cursorActive) {
@@ -98,7 +98,7 @@ BarWidget {
     if (dx !== 0) {
       if (!root.hasMedia || root.cursorIndex === 4) return
       if (root.cursorIndex === 0) {
-        if (root.service) root.service.seekBy(dx > 0 ? 5 : -5)
+        if (!autoRepeat && root.service) root.service.seekBy(dx > 0 ? 5 : -5)
         return
       }
       root.cursorIndex = Math.max(1, Math.min(root.cursorIndex + (dx > 0 ? 1 : -1), 3))
@@ -247,10 +247,10 @@ BarWidget {
     contentWidth: popup.fittedContentWidth(Style.space(340))
     contentHeight: popup.fittedContentHeight(column.implicitHeight)
 
-    PanelKeyCatcher {
+    MusicKeyCatcher {
       id: keyCatcher
       anchors.fill: parent
-      onMoveRequested: function(dx, dy) { root.moveCursor(dx, dy) }
+      onMoveRequested: function(dx, dy, autoRepeat) { root.moveCursor(dx, dy, autoRepeat) }
       onActivateRequested: root.activateCursor()
       onCloseRequested: root.close()
       onTabRequested: function(direction) {
@@ -438,26 +438,32 @@ BarWidget {
 
           CursorSurface {
             width: parent.width
-            height: playbackProgress.implicitHeight + Style.spacing.controlGap
+            height: playbackSlider.implicitHeight + Style.spacing.controlGap
             foreground: root.bar.foreground
             outline: true
             hasCursor: root.cursorActive && root.cursorIndex === 0
 
-            ProgressMeter {
-              id: playbackProgress
-              anchors.left: parent.left
-              anchors.right: parent.right
-              anchors.verticalCenter: parent.verticalCenter
+            MusicProgressSlider {
+              id: playbackSlider
+              bar: root.bar
+              anchors.fill: parent
               anchors.leftMargin: Style.space(6)
               anchors.rightMargin: Style.space(6)
-              value: progress.length > 0 ? progress.position / progress.length : 0
-              foreground: root.bar.foreground
-              rangeKnown: progress.lengthKnown
-              interactive: progress.lengthKnown && root.service && root.service.activePlayer
+              minimum: 0
+              maximum: Math.max(1, progress.length)
+              step: 5
+              value: progress.position
+              enabled: progress.lengthKnown && root.service && root.service.activePlayer
                 && root.service.activePlayer.canSeek
-              onMoved: function(ratio) {
-                if (root.service) root.service.seekTo(ratio * progress.length)
-              }
+              // Keep the row's layout stable while Apple Music's catalogue
+              // duration loads, but do not draw a placeholder slider whose
+              // knob would visibly jump once the real range arrives.
+              opacity: progress.lengthKnown && root.service && root.service.positionReady
+                ? (enabled ? 1.0 : 0.45) : 0.0
+              // Dragging only previews locally. One seek on release avoids
+              // queueing dozens of asynchronous MPRIS requests and the large
+              // overshoot that their delayed acknowledgements used to cause.
+              onReleased: function(seconds) { if (root.service) root.service.seekTo(seconds) }
             }
 
             HoverHandler {
@@ -472,7 +478,7 @@ BarWidget {
             width: parent.width
             Text {
               id: timeLeft
-              text: progress.fmt(progress.position)
+              text: progress.fmt(playbackSlider.dragging ? playbackSlider.liveValue : progress.position)
               color: Qt.darker(root.bar.foreground, 1.4)
               font.family: root.bar.fontFamily
               font.pixelSize: Style.font.caption
@@ -633,65 +639,44 @@ BarWidget {
     }
   }
 
-  // Thin rounded meter, in the spirit of a TUI progress bar.
-  component ProgressMeter: Item {
-    id: meter
-    property real value: 0
-    property color foreground: Color.foreground
-    property bool rangeKnown: false
-    property bool interactive: false
-    signal moved(real ratio)
-    property real thickness: Math.max(Style.space(3), Math.round(Style.spacing.controlHeight * 0.12))
+  // PanelKeyCatcher intentionally abstracts the raw QKeyEvent away, including
+  // whether a press came from keyboard auto-repeat. Seeking needs that one bit
+  // so holding an arrow cannot queue many five-second jumps. This otherwise
+  // keeps the same navigation contract used by Omarchy's standard panels.
+  component MusicKeyCatcher: Item {
+    id: catcher
+    signal moveRequested(int dx, int dy, bool autoRepeat)
+    signal activateRequested()
+    signal closeRequested()
+    signal tabRequested(int direction)
 
-    implicitHeight: thickness
-
-    Rectangle {
-      anchors.fill: parent
-      radius: height / 2
-      // A real duration gets the normal subtle rail. If neither MPRIS nor
-      // Apple's catalog knows the duration, keep a slightly stronger empty
-      // rail visible instead of making the whole control appear/disappear.
-      color: meter.foreground
-      opacity: meter.rangeKnown ? 0.22 : 0.34
-    }
-
-    Rectangle {
-      anchors.left: parent.left
-      anchors.verticalCenter: parent.verticalCenter
-      height: parent.height
-      radius: height / 2
-      width: parent.width * Math.max(0, Math.min(1, meter.value))
-      color: meter.foreground
-
-      Behavior on width {
-        NumberAnimation { duration: 200; easing.type: Easing.OutCubic }
+    focus: true
+    Keys.priority: Keys.BeforeItem
+    Keys.onPressed: function(event) {
+      if (event.key === Qt.Key_Escape) {
+        catcher.closeRequested(); event.accepted = true; return
       }
-    }
-
-    Rectangle {
-      visible: meter.interactive
-      x: Math.max(0, Math.min(parent.width - width, parent.width * meter.value - width / 2))
-      anchors.verticalCenter: parent.verticalCenter
-      width: Style.space(10)
-      height: width
-      radius: width / 2
-      color: meter.foreground
-      border.color: Color.popups.background
-      border.width: Style.space(2)
-    }
-
-    MouseArea {
-      anchors.fill: parent
-      enabled: meter.interactive
-      cursorShape: Qt.PointingHandCursor
-
-      function ratioAt(x) {
-        return Math.max(0, Math.min(1, x / Math.max(1, meter.width)))
+      if (event.key === Qt.Key_Tab || event.key === Qt.Key_Backtab) {
+        catcher.tabRequested((event.modifiers & Qt.ShiftModifier)
+          || event.key === Qt.Key_Backtab ? -1 : 1)
+        event.accepted = true
+        return
       }
-
-      onPressed: function(mouse) { meter.moved(ratioAt(mouse.x)) }
-      onPositionChanged: function(mouse) {
-        if (pressed) meter.moved(ratioAt(mouse.x))
+      if (event.key === Qt.Key_Down || event.text === "j") {
+        catcher.moveRequested(0, 1, event.isAutoRepeat); event.accepted = true; return
+      }
+      if (event.key === Qt.Key_Up || event.text === "k") {
+        catcher.moveRequested(0, -1, event.isAutoRepeat); event.accepted = true; return
+      }
+      if (event.key === Qt.Key_Right || event.text === "l") {
+        catcher.moveRequested(1, 0, event.isAutoRepeat); event.accepted = true; return
+      }
+      if (event.key === Qt.Key_Left || event.text === "h") {
+        catcher.moveRequested(-1, 0, event.isAutoRepeat); event.accepted = true; return
+      }
+      if (event.key === Qt.Key_Return || event.key === Qt.Key_Enter
+          || event.key === Qt.Key_Space) {
+        catcher.activateRequested(); event.accepted = true
       }
     }
   }
