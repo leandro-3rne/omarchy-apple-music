@@ -6,10 +6,11 @@
 # window, how to show and hide it, and how to shut it down on removal.
 set -euo pipefail
 
-APPLE_MUSIC_URL="https://music.apple.com"
+APPLE_MUSIC_BASE_URL="https://music.apple.com"
 PLUGIN_ID="io.github.leandro-3rne.apple-music"
 DATA_DIR="${XDG_DATA_HOME:-$HOME/.local/share}/leandro-3rne-apple-music"
 PROFILE_DIR="$DATA_DIR/chromium"
+STOREFRONT_FILE="$DATA_DIR/storefront"
 # Keep enough of the original cover for the large, high-resolution player art.
 ART_MAX_BYTES=$((8 * 1024 * 1024))
 SPECIAL_WORKSPACE="special:AM"
@@ -17,6 +18,42 @@ SPECIAL_WORKSPACE="special:AM"
 # there: quit_window checks this path later, after removal may have taken
 # the folder away.
 PLUGIN_DIR="$(dirname -- "${BASH_SOURCE[0]}")"
+
+# Apple Music can leave an authenticated web session in the 90-second preview
+# mode when the storefront inferred for the regionless URL does not match the
+# Apple Account. A two-letter storefront can therefore be pinned outside the
+# repository, alongside the browser profile. The environment override is
+# useful for one-off launches; the file is the persistent plugin setting.
+apple_music_url() {
+  local storefront=${APPLE_MUSIC_STOREFRONT:-}
+  if [[ -z $storefront && -f $STOREFRONT_FILE && ! -L $STOREFRONT_FILE ]]; then
+    IFS= read -r storefront <"$STOREFRONT_FILE" || true
+  fi
+  storefront=${storefront,,}
+  if [[ $storefront =~ ^[a-z]{2}$ ]]; then
+    printf '%s/%s/browse\n' "$APPLE_MUSIC_BASE_URL" "$storefront"
+  else
+    printf '%s\n' "$APPLE_MUSIC_BASE_URL"
+  fi
+}
+
+set_storefront() {
+  local storefront=${1,,} temp
+  [[ $storefront =~ ^[a-z]{2}$ ]] || {
+    echo "storefront must be a two-letter country code (for example: ch)" >&2
+    exit 2
+  }
+  if [[ -L $DATA_DIR || -L $STOREFRONT_FILE ]]; then
+    echo "refusing to write storefront through a symlink" >&2
+    exit 1
+  fi
+  mkdir -p "$DATA_DIR"
+  chmod 700 "$DATA_DIR"
+  temp=$(mktemp "$DATA_DIR/.storefront.XXXXXX")
+  chmod 600 "$temp"
+  printf '%s\n' "$storefront" >"$temp"
+  mv -f -- "$temp" "$STOREFRONT_FILE"
+}
 
 # --class is ignored by Chromium in --app mode: the window reports a
 # generic class like "chrome-music.apple.com__-Default" regardless, and
@@ -59,6 +96,7 @@ state() {
 }
 
 launch() {
+  local launch_url
   command -v chromium >/dev/null 2>&1 || { echo "chromium not found" >&2; exit 1; }
   # The profile holds the signed-in session, so it is only ever created at the
   # real location — never through a link standing in for it.
@@ -67,9 +105,10 @@ launch() {
     exit 1
   fi
   mkdir -p "$PROFILE_DIR"
+  launch_url=$(apple_music_url)
   exec uwsm-app -- chromium \
     --user-data-dir="$PROFILE_DIR" \
-    --app="$APPLE_MUSIC_URL" \
+    --app="$launch_url" \
     --no-first-run
 }
 
@@ -431,8 +470,12 @@ art)
   (( $# == 2 )) || { echo "usage: $0 art <path>" >&2; exit 2; }
   snapshot_art "$2" || exit 1
   ;;
+storefront)
+  (( $# == 2 )) || { echo "usage: $0 storefront <country-code>" >&2; exit 2; }
+  set_storefront "$2"
+  ;;
 *)
-  echo "usage: $0 <state|launch|show|toggle|close|quit|art>" >&2
+  echo "usage: $0 <state|launch|show|toggle|close|quit|art|storefront>" >&2
   exit 2
   ;;
 esac

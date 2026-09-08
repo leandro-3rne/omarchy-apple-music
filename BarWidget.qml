@@ -79,7 +79,7 @@ BarWidget {
   }
 
   function cursorTargets() {
-    return root.hasMedia ? [0, 1, 2, 3] : [3]
+    return root.hasMedia ? [0, 1, 2, 3, 4] : [4]
   }
 
   function moveCursor(dx, dy) {
@@ -87,29 +87,36 @@ BarWidget {
     var targets = root.cursorTargets()
     if (!root.cursorActive) {
       root.cursorActive = true
-      root.cursorIndex = root.hasMedia ? 1 : targets[0]
+      root.cursorIndex = root.hasMedia ? 2 : targets[0]
       return
     }
 
-    // Transport controls are one horizontal row; the window button is the
-    // row beneath it. Keep the two axes independent so Left/Right never jump
-    // to the button and Up/Down never walk through Previous/Play/Next.
+    // The progress slider, transport controls, and window button form three
+    // vertical rows. Left/Right adjusts the focused slider by five seconds,
+    // matching the audio panel's keyboard-adjustable volume slider; in the
+    // transport row the same keys continue to move between its buttons.
     if (dx !== 0) {
-      if (!root.hasMedia || root.cursorIndex === 3) return
-      root.cursorIndex = Math.max(0, Math.min(root.cursorIndex + (dx > 0 ? 1 : -1), 2))
+      if (!root.hasMedia || root.cursorIndex === 4) return
+      if (root.cursorIndex === 0) {
+        if (root.service) root.service.seekBy(dx > 0 ? 5 : -5)
+        return
+      }
+      root.cursorIndex = Math.max(1, Math.min(root.cursorIndex + (dx > 0 ? 1 : -1), 3))
     } else if (root.hasMedia) {
-      if (dy > 0 && root.cursorIndex < 3) root.cursorIndex = 3
-      else if (dy < 0 && root.cursorIndex === 3) root.cursorIndex = 1
+      if (root.cursorIndex === 0 && dy > 0) root.cursorIndex = 2
+      else if (root.cursorIndex >= 1 && root.cursorIndex <= 3)
+        root.cursorIndex = dy > 0 ? 4 : 0
+      else if (root.cursorIndex === 4 && dy < 0) root.cursorIndex = 2
     }
   }
 
   function activateCursor() {
     if (!root.cursorActive) return
     if (!root.service) return
-    if (root.cursorIndex === 0 && prevButton.enabled) root.service.runAction("previous")
-    else if (root.cursorIndex === 1 && playButton.enabled) root.service.runAction("playPause")
-    else if (root.cursorIndex === 2 && nextButton.enabled) root.service.runAction("next")
-    else if (root.cursorIndex === 3) root.openWindow()
+    if (root.cursorIndex === 1 && prevButton.enabled) root.service.runAction("previous")
+    else if (root.cursorIndex === 2 && playButton.enabled) root.service.runAction("playPause")
+    else if (root.cursorIndex === 3 && nextButton.enabled) root.service.runAction("next")
+    else if (root.cursorIndex === 4) root.openWindow()
   }
 
   onPopoverOpenChanged: {
@@ -429,16 +436,35 @@ BarWidget {
             return m + ":" + (r < 10 ? "0" : "") + r
           }
 
-          ProgressMeter {
-            visible: root.hasMedia
+          CursorSurface {
             width: parent.width
-            value: progress.length > 0 ? progress.position / progress.length : 0
+            height: playbackProgress.implicitHeight + Style.spacing.controlGap
             foreground: root.bar.foreground
-            rangeKnown: progress.lengthKnown
-            interactive: progress.lengthKnown && root.service && root.service.activePlayer
-              && root.service.activePlayer.canSeek
-            onMoved: function(ratio) {
-              if (root.service) root.service.seekTo(ratio * progress.length)
+            outline: true
+            hasCursor: root.cursorActive && root.cursorIndex === 0
+
+            ProgressMeter {
+              id: playbackProgress
+              anchors.left: parent.left
+              anchors.right: parent.right
+              anchors.verticalCenter: parent.verticalCenter
+              anchors.leftMargin: Style.space(6)
+              anchors.rightMargin: Style.space(6)
+              value: progress.length > 0 ? progress.position / progress.length : 0
+              foreground: root.bar.foreground
+              rangeKnown: progress.lengthKnown
+              interactive: progress.lengthKnown && root.service && root.service.activePlayer
+                && root.service.activePlayer.canSeek
+              onMoved: function(ratio) {
+                if (root.service) root.service.seekTo(ratio * progress.length)
+              }
+            }
+
+            HoverHandler {
+              onHoveredChanged: if (hovered) {
+                root.cursorActive = true
+                root.cursorIndex = 0
+              }
             }
           }
 
@@ -490,11 +516,11 @@ BarWidget {
               horizontalPadding: Style.space(12)
               verticalPadding: Style.space(8)
               iconSize: Style.font.iconLarge
-              hasCursor: root.cursorActive && root.cursorIndex === 0
+              hasCursor: root.cursorActive && root.cursorIndex === 1
               onHovered: function(isHovered) {
                 if (!isHovered) return
                 root.cursorActive = true
-                root.cursorIndex = 0
+                root.cursorIndex = 1
               }
               enabled: root.service && root.service.activePlayer && root.service.activePlayer.canGoPrevious
               opacity: enabled ? 1.0 : 0.4
@@ -514,11 +540,11 @@ BarWidget {
               horizontalPadding: Style.space(16)
               verticalPadding: Style.space(10)
               iconSize: Style.font.heading
-              hasCursor: root.cursorActive && root.cursorIndex === 1
+              hasCursor: root.cursorActive && root.cursorIndex === 2
               onHovered: function(isHovered) {
                 if (!isHovered) return
                 root.cursorActive = true
-                root.cursorIndex = 1
+                root.cursorIndex = 2
               }
               enabled: root.service && root.service.activePlayer
                 && (root.service.activePlayer.canTogglePlaying || root.service.activePlayer.canPlay || root.service.activePlayer.canPause)
@@ -539,11 +565,11 @@ BarWidget {
               horizontalPadding: Style.space(12)
               verticalPadding: Style.space(8)
               iconSize: Style.font.iconLarge
-              hasCursor: root.cursorActive && root.cursorIndex === 2
+              hasCursor: root.cursorActive && root.cursorIndex === 3
               onHovered: function(isHovered) {
                 if (!isHovered) return
                 root.cursorActive = true
-                root.cursorIndex = 2
+                root.cursorIndex = 3
               }
               enabled: root.service && root.service.activePlayer && root.service.activePlayer.canGoNext
               opacity: enabled ? 1.0 : 0.4
@@ -592,11 +618,11 @@ BarWidget {
           // so it's accurate at the moment it's seen.
           text: root.service && root.service.windowVisible ? "Hide Apple Music" : "Open Apple Music"
           bordered: true
-          hasCursor: root.cursorActive && root.cursorIndex === 3
+          hasCursor: root.cursorActive && root.cursorIndex === 4
           onHovered: function(isHovered) {
             if (!isHovered) return
             root.cursorActive = true
-            root.cursorIndex = 3
+            root.cursorIndex = 4
           }
           foreground: root.bar.foreground
           horizontalPadding: Style.spacing.controlPaddingX

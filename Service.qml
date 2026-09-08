@@ -742,6 +742,12 @@ Item {
     return true
   }
 
+  function seekBy(seconds) {
+    var delta = Number(seconds)
+    if (!isFinite(delta)) return false
+    return seekTo(livePosition() + delta)
+  }
+
   // MPRIS position is only pushed on seek/pause/resume, not continuously, so
   // the popover interpolates between syncs while playing rather than
   // polling for a live value.

@@ -61,12 +61,24 @@ Open the Apple Music window and sign in there. Credentials and cookies remain
 inside the plugin's dedicated local Chromium profile; they are never part of
 this repository.
 
+If an authenticated subscription still plays only 90-second previews, pin the
+web player to the two-letter storefront of the Apple Account, close the Apple
+Music window, and reopen it. For example:
+
+```sh
+~/.config/omarchy/plugins/io.github.leandro-3rne.apple-music/control.sh storefront ch
+```
+
+Replace `ch` with the account's country code. The selection is kept next to
+the isolated browser profile and is not written to the plugin repository.
+
 ## Usage
 
 - Left-click: open or close the now-playing panel.
 - Right-click: open the Apple Music window, or hide it when it is visible.
 - Scroll: previous or next track.
 - Arrow keys: move through panel controls.
+- With the progress bar selected, Left/Right seeks backward/forward 5 seconds.
 - Enter/Space: activate the selected control.
 - Click or drag the progress bar: seek within the current track when Apple
   Music reports that seeking is available.
