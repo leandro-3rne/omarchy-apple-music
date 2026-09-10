@@ -82,7 +82,8 @@ Music Chromium process and its socket are left untouched.
 - Right-click: open the Apple Music window, or hide it when it is visible.
 - Scroll: previous or next track.
 - Arrow keys: move through panel controls.
-- With the progress bar selected, Left/Right seeks backward/forward 5 seconds.
+- With the progress bar selected, Left/Right seeks backward/forward 5 seconds;
+  holding a key repeats in faster 10-second steps.
 - On the progress bar, scroll down to seek forward 5 seconds or scroll up to
   seek backward 5 seconds.
 - Enter/Space: activate the selected control.

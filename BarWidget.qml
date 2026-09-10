@@ -92,13 +92,17 @@ BarWidget {
     }
 
     // The progress slider, transport controls, and window button form three
-    // vertical rows. Left/Right adjusts the focused slider by five seconds,
-    // matching the audio panel's keyboard-adjustable volume slider; in the
-    // transport row the same keys continue to move between its buttons.
+    // vertical rows. Left/Right adjusts the focused slider by five seconds;
+    // keyboard auto-repeat therefore keeps seeking while a key is held, just
+    // like the volume slider in the audio panel. In the transport row the same
+    // keys continue to move between its buttons.
     if (dx !== 0) {
       if (!root.hasMedia || root.cursorIndex === 4) return
       if (root.cursorIndex === 0) {
-        if (!autoRepeat && root.service) root.service.seekBy(dx > 0 ? 5 : -5)
+        if (root.service) {
+          var step = autoRepeat ? 10 : 5
+          root.service.seekBy(dx > 0 ? step : -step)
+        }
         return
       }
       root.cursorIndex = Math.max(1, Math.min(root.cursorIndex + (dx > 0 ? 1 : -1), 3))
@@ -640,9 +644,9 @@ BarWidget {
   }
 
   // PanelKeyCatcher intentionally abstracts the raw QKeyEvent away, including
-  // whether a press came from keyboard auto-repeat. Seeking needs that one bit
-  // so holding an arrow cannot queue many five-second jumps. This otherwise
-  // keeps the same navigation contract used by Omarchy's standard panels.
+  // whether a press came from keyboard auto-repeat. Seeking uses that bit to
+  // make held arrows advance faster while keeping the standard panel
+  // navigation contract for every other control.
   component MusicKeyCatcher: Item {
     id: catcher
     signal moveRequested(int dx, int dy, bool autoRepeat)

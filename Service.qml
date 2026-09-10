@@ -269,6 +269,10 @@ Item {
     onTriggered: root.positionReady = !!root.activePlayer
   }
 
+  function restartInitialPositionReveal() {
+    initialPositionReveal.restart()
+  }
+
   // Apple Music briefly clears its Media Session metadata between tracks.
   // Keep the last complete presentation while the dedicated application is
   // still alive, then replace it as soon as the next song arrives. Without
@@ -775,6 +779,7 @@ Item {
     // resolved to one absolute target here.
     pendingSeekPosition = clamped
     pendingSeekTimestamp = Date.now()
+    pendingSeekAttempts = 0
     seekAckTimeout.restart()
     player.position = clamped
     return true
@@ -788,10 +793,12 @@ Item {
 
   property double pendingSeekPosition: -1
   property double pendingSeekTimestamp: 0
+  property int pendingSeekAttempts: 0
 
   function clearPendingSeek() {
     pendingSeekPosition = -1
     pendingSeekTimestamp = 0
+    pendingSeekAttempts = 0
     seekAckTimeout.stop()
   }
 
@@ -803,7 +810,7 @@ Item {
   Connections {
     target: root.activePlayer
     function onPositionChanged() {
-      if (!root.positionReady) root.initialPositionReveal.restart()
+      if (!root.positionReady) root.restartInitialPositionReveal()
       if (root.pendingSeekPosition < 0 || !root.activePlayer) return
       var expected = root.pendingSeekPosition
       if (root.activePlayer.isPlaying)
@@ -823,9 +830,31 @@ Item {
 
   Timer {
     id: seekAckTimeout
-    interval: 2000
+    // Chromium occasionally accepts SetPosition only after its media-session
+    // bridge catches up. Retry the same absolute position a few times instead
+    // of letting a stale MPRIS position make subsequent rewinds appear stuck.
+    interval: 350
     repeat: false
-    onTriggered: root.clearPendingSeek()
+    onTriggered: {
+      if (root.pendingSeekPosition < 0 || !root.activePlayer) return
+
+      var expected = root.pendingSeekPosition
+      if (root.activePlayer.isPlaying)
+        expected += (Date.now() - root.pendingSeekTimestamp) / 1000
+      var reported = Number(root.activePlayer.position || 0)
+      if (Math.abs(reported - expected) <= 3) {
+        root.clearPendingSeek()
+        return
+      }
+
+      if (root.pendingSeekAttempts >= 5) {
+        root.clearPendingSeek()
+        return
+      }
+      root.pendingSeekAttempts += 1
+      root.activePlayer.position = root.pendingSeekPosition
+      restart()
+    }
   }
 
   function livePosition() {
