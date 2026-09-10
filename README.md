@@ -72,6 +72,10 @@ Music window, and reopen it. For example:
 Replace `ch` with the account's country code. The selection is kept next to
 the isolated browser profile and is not written to the plugin repository.
 
+If Chromium was killed or crashed while Apple Music was open, the next launch
+clears only stale singleton links from this dedicated profile. An active Apple
+Music Chromium process and its socket are left untouched.
+
 ## Usage
 
 - Left-click: open or close the now-playing panel.

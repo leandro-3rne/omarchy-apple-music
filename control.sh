@@ -73,6 +73,39 @@ browser_pid() {
   return 1
 }
 
+# Chromium leaves Singleton* symlinks behind when it is killed or crashes.
+# Remove them only after confirming that our dedicated browser is gone and
+# that the previous singleton socket no longer exists. This preserves the
+# signed-in profile while preventing a stale lock from blocking the next
+# launch.
+clear_stale_profile_locks() {
+  local socket_target singleton
+
+  if browser_pid >/dev/null 2>&1; then
+    return 0
+  fi
+
+  socket_target=$(readlink -- "$PROFILE_DIR/SingletonSocket" 2>/dev/null || true)
+  if [[ -n $socket_target && $socket_target != /* ]]; then
+    socket_target="$PROFILE_DIR/$socket_target"
+  fi
+  if [[ -n $socket_target && -S $socket_target ]]; then
+    echo "refusing to clear Apple Music profile locks: Chromium socket is active" >&2
+    return 1
+  fi
+
+  for singleton in \
+    "$PROFILE_DIR/SingletonLock" \
+    "$PROFILE_DIR/SingletonCookie" \
+    "$PROFILE_DIR/SingletonSocket"; do
+    [[ -L $singleton ]] || continue
+    unlink -- "$singleton" || {
+      echo "could not clear stale Apple Music Chromium lock: $singleton" >&2
+      return 1
+    }
+  done
+}
+
 # Emits {"open":bool,"address":string,"pid":number,"workspace":string} for
 # our dedicated window, or open:false if it isn't running.
 state() {
@@ -105,6 +138,7 @@ launch() {
     exit 1
   fi
   mkdir -p "$PROFILE_DIR"
+  clear_stale_profile_locks
   launch_url=$(apple_music_url)
   exec uwsm-app -- chromium \
     --user-data-dir="$PROFILE_DIR" \
