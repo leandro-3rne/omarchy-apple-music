@@ -79,7 +79,7 @@ browser_pid() {
 # signed-in profile while preventing a stale lock from blocking the next
 # launch.
 clear_stale_profile_locks() {
-  local socket_target singleton
+  local socket_target singleton listening_sockets
 
   if browser_pid >/dev/null 2>&1; then
     return 0
@@ -90,8 +90,22 @@ clear_stale_profile_locks() {
     socket_target="$PROFILE_DIR/$socket_target"
   fi
   if [[ -n $socket_target && -S $socket_target ]]; then
-    echo "refusing to clear Apple Music profile locks: Chromium socket is active" >&2
-    return 1
+    # A stale Unix socket remains a socket file after Chromium is killed or
+    # crashes. Merely testing -S therefore mistakes stale locks for a live
+    # browser and blocks every future launch. Ask the kernel whether this
+    # exact path is currently listening instead.
+    command -v ss >/dev/null 2>&1 || {
+      echo "refusing to clear Apple Music profile locks: cannot verify Chromium socket" >&2
+      return 1
+    }
+    listening_sockets=$(ss -lxH 2>/dev/null) || {
+      echo "refusing to clear Apple Music profile locks: cannot inspect Chromium socket" >&2
+      return 1
+    }
+    if awk -v target="$socket_target" '$2 == "LISTEN" && $5 == target { found=1 } END { exit(found ? 0 : 1) }' <<<"$listening_sockets"; then
+      echo "refusing to clear Apple Music profile locks: Chromium socket is active" >&2
+      return 1
+    fi
   fi
 
   for singleton in \
