@@ -17,8 +17,15 @@ Item {
   property var manifest: null
   property var pluginRegistry: null
 
-  readonly property string sourceDir: manifest && manifest.__sourceDir ? String(manifest.__sourceDir) : ""
-  readonly property string controlPath: sourceDir ? sourceDir + "/control.sh" : ""
+  // Third-party manifests intentionally hide __sourceDir from plugins. Resolve
+  // the helper relative to this QML component instead, so the browser control
+  // path remains available without exposing the plugin registry's source path.
+  readonly property string controlPath: {
+    var url = String(Qt.resolvedUrl("control.sh"))
+    if (url.indexOf("file://") !== 0) return ""
+    try { return decodeURIComponent(url.substring("file://".length)) }
+    catch (e) { return "" }
+  }
 
   // ------------------------------------------------------- Hyprland window
   property int browserPid: 0
