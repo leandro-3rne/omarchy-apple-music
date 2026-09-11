@@ -55,6 +55,39 @@ set_storefront() {
   mv -f -- "$temp" "$STOREFRONT_FILE"
 }
 
+# Chromium's app window does not reliably complete Apple's first-time sign-in:
+# the page can look authenticated without ever receiving a persistent Music
+# token. Once that token exists, the app window reuses it normally. Inspect
+# only the cookie metadata, never the encrypted token value.
+has_persistent_session() {
+  local cookies="$PROFILE_DIR/Default/Cookies"
+  [[ -f $cookies ]] || return 1
+
+  python3 - "$cookies" <<'PY'
+import sqlite3
+import sys
+import time
+
+try:
+    database = sqlite3.connect(f"file:{sys.argv[1]}?mode=ro", uri=True)
+    minimum_expiry = int((time.time() + 11_644_473_600) * 1_000_000)
+    authenticated = database.execute(
+        """
+        SELECT 1 FROM cookies
+        WHERE name = 'media-user-token'
+          AND is_persistent = 1
+          AND expires_utc > ?
+        LIMIT 1
+        """,
+        (minimum_expiry,),
+    ).fetchone()
+except (OSError, sqlite3.Error):
+    raise SystemExit(1)
+
+raise SystemExit(0 if authenticated else 1)
+PY
+}
+
 # --class is ignored by Chromium in --app mode: the window reports a
 # generic class like "chrome-music.apple.com__-Default" regardless, and
 # that generic class isn't unique if another Apple Music plugin using the
@@ -154,10 +187,19 @@ launch() {
   mkdir -p "$PROFILE_DIR"
   clear_stale_profile_locks
   launch_url=$(apple_music_url)
+  if has_persistent_session; then
+    exec uwsm-app -- chromium \
+      --user-data-dir="$PROFILE_DIR" \
+      --app="$launch_url" \
+      --no-first-run
+  fi
+
+  # Use a regular browser window only for initial authentication. After the
+  # user signs in and closes it, the next launch returns to app mode.
   exec uwsm-app -- chromium \
     --user-data-dir="$PROFILE_DIR" \
-    --app="$launch_url" \
-    --no-first-run
+    --no-first-run \
+    "$launch_url"
 }
 
 # Pops the window onto the currently active workspace and focuses it.

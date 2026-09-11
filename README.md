@@ -57,9 +57,11 @@ The widget is placed on the right side of the bar by default. Move it with:
 omarchy bar move io.github.leandro-3rne.apple-music --section right
 ```
 
-Open the Apple Music window and sign in there. Credentials and cookies remain
-inside the plugin's dedicated local Chromium profile; they are never part of
-this repository.
+On the first launch, Apple Music opens in a regular Chromium window so Apple's
+sign-in flow can create its persistent session. Sign in and close that window;
+later launches use the compact app window. Credentials and cookies remain inside
+the plugin's dedicated local Chromium profile; they are never part of this
+repository.
 
 If an authenticated subscription still plays only 90-second previews, pin the
 web player to the two-letter storefront of the Apple Account, close the Apple
