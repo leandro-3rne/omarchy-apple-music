@@ -34,7 +34,10 @@ licensing. See [Credits](#credits) and [LICENSE](LICENSE).
   drag anywhere on it to seek to a different position in the current track.
 - Right-click opens or hides the real `music.apple.com` Chromium window. If it
   belongs to a Hyprland group, hiding detaches and moves only Apple Music while
-  the other group members remain on their workspace.
+  the other group members remain on their workspace. Opening it again joins
+  the currently focused group, when there is one.
+- Apple Music can live on the regular Hyprland scratchpad: Open/Hide reveals
+  and hides that scratchpad without pulling the window out of it.
 - Clicking the artwork or title always brings the player window into view.
 - Scrolling the bar icon changes track.
 - The music-note icon becomes a small equalizer during playback.

@@ -31,16 +31,17 @@ Item {
   property int browserPid: 0
   property string windowAddress: ""
   property string windowWorkspace: ""
+  property bool windowWorkspaceVisible: false
   property bool windowKnownOpen: false
   property bool launching: false
   property string pendingIntent: ""
   property string lastError: ""
 
   // windowKnownOpen only means the process exists — it stays true after
-  // hiding, since that just parks the window rather than closing it. This
-  // is "exists AND not currently parked hidden", which is what UI asking
-  // "will the next click hide or show it" actually needs.
-  readonly property bool windowVisible: windowKnownOpen && windowWorkspace.indexOf("special:") !== 0
+  // hiding, since that just parks the window rather than closing it. Real
+  // workspace visibility also covers a user scratchpad correctly: visible
+  // while presented on a monitor, hidden after the scratchpad is toggled off.
+  readonly property bool windowVisible: windowKnownOpen && windowWorkspaceVisible
 
   function refresh() { requestState("sync") }
 
@@ -62,6 +63,7 @@ Item {
     windowKnownOpen = state.open === true
     windowAddress = windowKnownOpen ? String(state.address || "") : ""
     windowWorkspace = windowKnownOpen ? String(state.workspace || "") : ""
+    windowWorkspaceVisible = windowKnownOpen && state.visible === true
     browserPid = windowKnownOpen ? (parseInt(state.pid, 10) || 0) : 0
 
     if (intent === "open") {
@@ -144,6 +146,7 @@ Item {
     windowKnownOpen = false
     windowAddress = ""
     windowWorkspace = ""
+    windowWorkspaceVisible = false
     browserPid = 0
     clearDisplayedMetadata()
   }

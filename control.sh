@@ -13,7 +13,8 @@ PROFILE_DIR="$DATA_DIR/chromium"
 STOREFRONT_FILE="$DATA_DIR/storefront"
 # Keep enough of the original cover for the large, high-resolution player art.
 ART_MAX_BYTES=$((8 * 1024 * 1024))
-SPECIAL_WORKSPACE="special:AM"
+SPECIAL_WORKSPACE="special:Apple Music"
+LEGACY_SPECIAL_WORKSPACE="special:AM"
 # Resolved once at startup, while the plugin folder is still known to be
 # there: quit_window checks this path later, after removal may have taken
 # the folder away.
@@ -153,24 +154,32 @@ clear_stale_profile_locks() {
   done
 }
 
-# Emits {"open":bool,"address":string,"pid":number,"workspace":string} for
-# our dedicated window, or open:false if it isn't running.
+# Emits the window's identity, workspace, and real visibility. A special
+# workspace is visible only while a monitor is presenting it; its name alone
+# is therefore not enough to decide whether the bar should say Open or Hide.
 state() {
-  local pid clients
+  local pid clients monitors
   pid=$(browser_pid || true)
   if [[ -z $pid ]]; then
-    jq -cn '{open:false,address:"",pid:0,workspace:""}'
+    jq -cn '{open:false,address:"",pid:0,workspace:"",visible:false}'
     return
   fi
 
   clients=$(hyprctl -j clients 2>/dev/null) || clients="[]"
-  jq -cn --argjson pid "$pid" --argjson clients "$clients" '
+  monitors=$(hyprctl -j monitors 2>/dev/null) || monitors="[]"
+  jq -cn --argjson pid "$pid" --argjson clients "$clients" --argjson monitors "$monitors" '
     (first($clients[] | select(.pid == $pid)) // null) as $c |
+    ($c.workspace.name // "") as $workspace |
     {
       open: ($c != null),
       address: ($c.address // ""),
       pid: $pid,
-      workspace: ($c.workspace.name // "")
+      workspace: $workspace,
+      visible: (
+        $c != null and any($monitors[];
+          .activeWorkspace.name == $workspace or .specialWorkspace.name == $workspace
+        )
+      )
     }
   '
 }
@@ -202,7 +211,11 @@ launch() {
     "$launch_url"
 }
 
-# Pops the window onto the currently active workspace and focuses it.
+# Shows and focuses the window. A window intentionally placed on a normal
+# special workspace such as the scratchpad stays there: the workspace is
+# revealed if necessary instead of pulling Apple Music out of it. A window
+# parked on our own hidden workspace moves to the focused window's workspace;
+# if that focused window belongs to a group, Apple Music joins that group.
 # Classic dispatch strings ("movetoworkspace ...") are not reliably honored
 # by this Hyprland build, whether issued via the hyprctl CLI or Quickshell's
 # Hyprland.dispatch(); hl.dsp.* via `hyprctl eval` is the mechanism that
@@ -217,13 +230,54 @@ show_window() {
   local address=$1
   [[ $address =~ ^0x[0-9a-fA-F]+$ ]] || { echo "invalid address: $address" >&2; exit 2; }
   hyprctl eval "
-    local w = \"address:$address\"
+    local w = hl.get_window(\"address:$address\")
+    if not w then error(\"Apple Music window disappeared\") end
     local cursor = hl.get_cursor_pos()
-    local ws = hl.get_active_workspace()
-    if ws and ws.name then
-      hl.dispatch(hl.dsp.window.move({ window = w, workspace = ws.name, follow = false }))
+    local source_ws = w.workspace
+
+    local parked = source_ws and (source_ws.name == \"$SPECIAL_WORKSPACE\" or source_ws.name == \"$LEGACY_SPECIAL_WORKSPACE\")
+    if source_ws and source_ws.special and not parked then
+      if not source_ws.visible then
+        local special_name = source_ws.name:gsub(\"^special:\", \"\")
+        hl.dispatch(hl.dsp.workspace.toggle_special(special_name))
+      end
+    else
+      local target = hl.get_active_window()
+      local target_group = target and target.group or nil
+      local target_ws = target and target.workspace or hl.get_active_workspace()
+      if target_ws and target_ws.name then
+        hl.dispatch(hl.dsp.window.move({ window = w, workspace = target_ws.name, follow = false }))
+      end
+      if parked and target_group then
+        target_group:add(w)
+      end
     end
     hl.dispatch(hl.dsp.focus({ window = w }))
+    if cursor and cursor.x and cursor.y then
+      hl.dispatch(hl.dsp.cursor.move({ x = math.floor(cursor.x), y = math.floor(cursor.y) }))
+    end
+  "
+}
+
+# Scratchpad and other user-selected special workspaces keep their native
+# show/hide behavior. Toggling them never relocates Apple Music to the
+# plugin's private parking workspace.
+toggle_special_window() {
+  local address=$1
+  [[ $address =~ ^0x[0-9a-fA-F]+$ ]] || { echo "invalid address: $address" >&2; exit 2; }
+  hyprctl eval "
+    local w = hl.get_window(\"address:$address\")
+    local ws = w and w.workspace or nil
+    if not ws or not ws.special or ws.name == \"$SPECIAL_WORKSPACE\" or ws.name == \"$LEGACY_SPECIAL_WORKSPACE\" then
+      error(\"Apple Music is not on a user special workspace\")
+    end
+    local cursor = hl.get_cursor_pos()
+    local was_visible = ws.visible
+    local special_name = ws.name:gsub(\"^special:\", \"\")
+    hl.dispatch(hl.dsp.workspace.toggle_special(special_name))
+    if not was_visible then
+      hl.dispatch(hl.dsp.focus({ window = w }))
+    end
     if cursor and cursor.x and cursor.y then
       hl.dispatch(hl.dsp.cursor.move({ x = math.floor(cursor.x), y = math.floor(cursor.y) }))
     end
@@ -277,8 +331,13 @@ toggle_window() {
   addr=$(jq -r '.address' <<<"$current")
   workspace=$(jq -r '.workspace' <<<"$current")
 
-  if [[ $workspace == "$SPECIAL_WORKSPACE" ]]; then
+  if [[ $workspace == "$SPECIAL_WORKSPACE" || $workspace == "$LEGACY_SPECIAL_WORKSPACE" ]]; then
     show_window "$addr"
+    return
+  fi
+
+  if [[ $workspace == special:* ]]; then
+    toggle_special_window "$addr"
     return
   fi
 
