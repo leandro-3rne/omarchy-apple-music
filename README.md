@@ -32,7 +32,9 @@ licensing. See [Credits](#credits) and [LICENSE](LICENSE).
   and previous/play-pause/next controls.
 - The progress bar follows playback in real time and is interactive: click or
   drag anywhere on it to seek to a different position in the current track.
-- Right-click opens or hides the real `music.apple.com` Chromium window.
+- Right-click opens or hides the real `music.apple.com` Chromium window. If it
+  belongs to a Hyprland group, hiding detaches and moves only Apple Music while
+  the other group members remain on their workspace.
 - Clicking the artwork or title always brings the player window into view.
 - Scrolling the bar icon changes track.
 - The music-note icon becomes a small equalizer during playback.

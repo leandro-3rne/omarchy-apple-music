@@ -231,15 +231,21 @@ show_window() {
 }
 
 # Parks the window on a hidden workspace instead of closing it — playback
-# and the signed-in session keep going, same idea as minimizing. Restores
-# cursor position too, defensively matching show_window, in case moving a
-# window across workspaces has the same pointer-warping side effect.
+# and the signed-in session keep going, same idea as minimizing. If Apple
+# Music is part of a group, detach only that exact window first; otherwise
+# Hyprland moves the whole group to the hidden workspace. Restores cursor
+# position too, defensively matching show_window, in case moving a window
+# across workspaces has the same pointer-warping side effect.
 hide_window() {
   local address=$1
   [[ $address =~ ^0x[0-9a-fA-F]+$ ]] || { echo "invalid address: $address" >&2; exit 2; }
   hyprctl eval "
     local cursor = hl.get_cursor_pos()
-    hl.dispatch(hl.dsp.window.move({ window = \"address:$address\", workspace = \"$SPECIAL_WORKSPACE\", follow = false }))
+    local w = hl.get_window(\"address:$address\")
+    if w and w.group then
+      hl.dispatch(hl.dsp.window.move({ window = w, out_of_group = true }))
+    end
+    hl.dispatch(hl.dsp.window.move({ window = w or \"address:$address\", workspace = \"$SPECIAL_WORKSPACE\", follow = false }))
     if cursor and cursor.x and cursor.y then
       hl.dispatch(hl.dsp.cursor.move({ x = math.floor(cursor.x), y = math.floor(cursor.y) }))
     end
