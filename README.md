@@ -38,9 +38,9 @@ licensing. See [Credits](#credits) and [LICENSE](LICENSE).
   the currently focused group, when there is one.
 - Hiding Apple Music from a visible scratchpad detaches and parks only its
   window; the scratchpad and the rest of its group stay visible. If it was the
-  last scratchpad window, the empty Scratchpad hint remains and the next open
-  returns Apple Music there. Otherwise opening it again keeps the visible
-  scratchpad as the target and joins the current group, when present.
+  last scratchpad window, the now-empty scratchpad is closed like any other
+  empty scratchpad. Otherwise opening it again keeps the visible scratchpad as
+  the target and joins the current group, when present.
 - Apple Music is single-instance. Opening it from a focused group on a fresh
   launch remembers that group and adds only the new Apple Music window to it;
   an existing window in `special:Apple Music` is always brought to the current
