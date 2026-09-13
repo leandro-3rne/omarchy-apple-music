@@ -211,10 +211,12 @@ launch() {
     "$launch_url"
 }
 
-# Shows and focuses the window. Apple Music is never revealed by opening a
-# special workspace: whether it was parked on the plugin workspace or left on
-# a hidden scratchpad, it moves into the currently focused workspace instead.
-# If the focused window belongs to a group, Apple Music joins that group.
+# Shows and focuses the window. Apple Music is never revealed by opening its
+# parking special workspace. A window already placed on a normal workspace is
+# kept there and focused, which switches to its existing workspace instead of
+# moving it under the user. Only a window parked on special:Apple Music (or the
+# legacy special:AM) is moved into the currently focused workspace; a visible
+# scratchpad takes precedence, and a focused group is joined in that target.
 # Classic dispatch strings ("movetoworkspace ...") are not reliably honored
 # by this Hyprland build, whether issued via the hyprctl CLI or Quickshell's
 # Hyprland.dispatch(); hl.dsp.* via `hyprctl eval` is the mechanism that
@@ -232,11 +234,12 @@ show_window() {
     [[ $target_address =~ ^0x[0-9a-fA-F]+$ ]] || { echo "invalid target address: $target_address" >&2; exit 2; }
     target_expr="hl.get_window(\"address:$target_address\")"
   fi
-  # A workspace move is group-aware. Detach Apple Music first so selecting it
-  # from Alt-Tab can never drag the rest of a hidden scratchpad group along.
+  # A workspace move is group-aware. Detach Apple Music first only when it is
+  # parked on the Apple Music special workspace; focusing an already-placed
+  # normal-workspace window must preserve its existing group.
   hyprctl eval "
     local w = hl.get_window(\"address:$address\")
-    if w and w.group then
+    if w and w.group and w.workspace and (w.workspace.name == \"$SPECIAL_WORKSPACE\" or w.workspace.name == \"$LEGACY_SPECIAL_WORKSPACE\") then
       hl.dispatch(hl.dsp.window.move({ window = w, out_of_group = true }))
     end
   "
@@ -244,33 +247,43 @@ show_window() {
     local w = hl.get_window(\"address:$address\")
     if not w then error(\"Apple Music window disappeared\") end
     local cursor = hl.get_cursor_pos()
-    local target = $target_expr
-    local target_group = target and target.group or nil
-    -- A hidden Apple Music window can remain Hyprland's last active window.
-    -- Always use the workspace currently shown by the monitor. A visible
-    -- scratchpad takes precedence so opening Apple Music while it is open
-    -- keeps Apple Music in that scratchpad; the Apple Music parking special
-    -- workspace is deliberately never selected as a target.
-    local target_ws = hl.get_active_workspace()
-    local active_special = hl.get_active_special_workspace()
-    if active_special and active_special.name == \"special:scratchpad\" then
-      target_ws = active_special
+    local source_ws = w.workspace
+    local source_name = source_ws and source_ws.name or \"\"
+    local parked = source_name == \"$SPECIAL_WORKSPACE\" or source_name == \"$LEGACY_SPECIAL_WORKSPACE\"
+
+    if not parked then
+      -- The window is already in a user workspace (including a scratchpad).
+      -- Focus it in place so Hyprland switches to that existing spot.
+      hl.dispatch(hl.dsp.focus({ window = w }))
+    else
+      local target = $target_expr
+      local target_group = target and target.group or nil
+      -- A hidden Apple Music window can remain Hyprland's last active window.
+      -- Always use the workspace currently shown by the monitor. A visible
+      -- scratchpad takes precedence so opening Apple Music while it is open
+      -- keeps Apple Music in that scratchpad; the Apple Music parking special
+      -- workspace is deliberately never selected as a target.
+      local target_ws = hl.get_active_workspace()
+      local active_special = hl.get_active_special_workspace()
+      if active_special and active_special.name == \"special:scratchpad\" then
+        target_ws = active_special
+      end
+      if target_group and target.workspace and target_ws and target.workspace.name ~= target_ws.name then
+        target_group = nil
+      end
+      if target_ws and target_ws.name then
+        hl.dispatch(hl.dsp.window.move({ window = w, workspace = target_ws.name, follow = false }))
+        -- A move into an already-present special workspace is queued. Flush
+        -- that property refresh before focusing so Hyprland keeps the
+        -- scratchpad visible instead of applying focus against the old
+        -- parking workspace.
+        hl.exec_scheduled_prop_refresh_immediately()
+      end
+      if target_group and w.group ~= target_group then
+        target_group:add(w)
+      end
+      hl.dispatch(hl.dsp.focus({ window = w }))
     end
-    if target_group and target.workspace and target_ws and target.workspace.name ~= target_ws.name then
-      target_group = nil
-    end
-    if target_ws and target_ws.name then
-      hl.dispatch(hl.dsp.window.move({ window = w, workspace = target_ws.name, follow = false }))
-      -- A move into an already-present special workspace is queued. Flush
-      -- that property refresh before focusing so Hyprland keeps the
-      -- scratchpad visible instead of applying focus against the old
-      -- parking workspace.
-      hl.exec_scheduled_prop_refresh_immediately()
-    end
-    if target_group and w.group ~= target_group then
-      target_group:add(w)
-    end
-    hl.dispatch(hl.dsp.focus({ window = w }))
     if cursor and cursor.x and cursor.y then
       hl.dispatch(hl.dsp.cursor.move({ x = math.floor(cursor.x), y = math.floor(cursor.y) }))
     end

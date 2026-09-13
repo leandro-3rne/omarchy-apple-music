@@ -43,7 +43,9 @@ licensing. See [Credits](#credits) and [LICENSE](LICENSE).
   launch remembers that group and adds only the new Apple Music window to it;
   an existing window in `special:Apple Music` is always brought to the current
   workspace instead of exposing that parking workspace. When the scratchpad is
-  visible, it is the target workspace for the Apple Music window.
+  visible, it is the target workspace for the Apple Music window. If Apple
+  Music is already on a normal workspace, opening it switches back to that
+  existing workspace instead of moving the window.
 - Clicking the artwork or title always brings the player window into view.
 - Scrolling the bar icon changes track.
 - The music-note icon becomes a small equalizer during playback.
