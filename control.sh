@@ -216,7 +216,8 @@ launch() {
 # kept there and focused, which switches to its existing workspace instead of
 # moving it under the user. Only a window parked on special:Apple Music (or the
 # legacy special:AM) is moved into the currently focused workspace; a visible
-# scratchpad takes precedence, and a focused group is joined in that target.
+# or empty Scratchpad takes precedence, and a focused group is joined in that
+# target when it is a real workspace target.
 # Classic dispatch strings ("movetoworkspace ...") are not reliably honored
 # by this Hyprland build, whether issued via the hyprctl CLI or Quickshell's
 # Hyprland.dispatch(); hl.dsp.* via `hyprctl eval` is the mechanism that
@@ -229,11 +230,14 @@ launch() {
 # every right-click yanks your mouse over to wherever the window ends up.
 show_window() {
   local address=$1 target_address=${2:-} target_expr='hl.get_active_window()'
+  local empty_scratchpad_state empty_scratchpad=false
   [[ $address =~ ^0x[0-9a-fA-F]+$ ]] || { echo "invalid address: $address" >&2; exit 2; }
   if [[ -n $target_address ]]; then
     [[ $target_address =~ ^0x[0-9a-fA-F]+$ ]] || { echo "invalid target address: $target_address" >&2; exit 2; }
     target_expr="hl.get_window(\"address:$target_address\")"
   fi
+  empty_scratchpad_state=$(omarchy-shell shell call io.github.leandro-3rne.window-switcher isScratchpadEmpty '{}' 2>/dev/null || true)
+  [[ $empty_scratchpad_state == true ]] && empty_scratchpad=true
   # A workspace move is group-aware. Detach Apple Music first only when it is
   # parked on the Apple Music special workspace; focusing an already-placed
   # normal-workspace window must preserve its existing group.
@@ -263,16 +267,27 @@ show_window() {
       -- scratchpad takes precedence so opening Apple Music while it is open
       -- keeps Apple Music in that scratchpad; the Apple Music parking special
       -- workspace is deliberately never selected as a target.
-      local target_ws = hl.get_active_workspace()
-      local active_special = hl.get_active_special_workspace()
-      if active_special and active_special.name == \"special:scratchpad\" then
-        target_ws = active_special
-      end
-      if target_group and target.workspace and target_ws and target.workspace.name ~= target_ws.name then
+      local target_ws = nil
+      local target_name = nil
+      if $empty_scratchpad then
+        -- An empty Scratchpad is represented by the switcher's persistent
+        -- hint, so Hyprland has no special-workspace object to query yet.
+        -- Moving to this selector creates and reveals the real Scratchpad.
+        target_name = \"special:scratchpad\"
         target_group = nil
+      else
+        target_ws = hl.get_active_workspace()
+        local active_special = hl.get_active_special_workspace()
+        if active_special and active_special.name == \"special:scratchpad\" then
+          target_ws = active_special
+        end
+        if target_ws then target_name = target_ws.name end
+        if target_group and target.workspace and target_name and target.workspace.name ~= target_name then
+          target_group = nil
+        end
       end
-      if target_ws and target_ws.name then
-        hl.dispatch(hl.dsp.window.move({ window = w, workspace = target_ws.name, follow = false }))
+      if target_name then
+        hl.dispatch(hl.dsp.window.move({ window = w, workspace = target_name, follow = $empty_scratchpad }))
         -- A move into an already-present special workspace is queued. Flush
         -- that property refresh before focusing so Hyprland keeps the
         -- scratchpad visible instead of applying focus against the old
@@ -288,6 +303,11 @@ show_window() {
       hl.dispatch(hl.dsp.cursor.move({ x = math.floor(cursor.x), y = math.floor(cursor.y) }))
     end
   "
+  if [[ $empty_scratchpad == true ]]; then
+    # The empty message is only a hint; once Apple Music supplies the first
+    # Scratchpad window, remove that hint without toggling a new one on.
+    omarchy-shell shell call io.github.leandro-3rne.window-switcher dismissScratchpadEmpty '{}' >/dev/null 2>&1 || true
+  fi
 }
 
 # Parks the window on a hidden workspace instead of closing it — playback
