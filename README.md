@@ -39,6 +39,11 @@ licensing. See [Credits](#credits) and [LICENSE](LICENSE).
 - Hiding Apple Music from a visible scratchpad detaches and parks only its
   window; the scratchpad and the rest of its group stay visible. Opening it
   again moves it into the current workspace and current group, when present.
+- Apple Music is single-instance. Opening it from a focused group on a fresh
+  launch remembers that group and adds only the new Apple Music window to it;
+  an existing window in `special:Apple Music` is always brought to the current
+  workspace instead of exposing that parking workspace. When the scratchpad is
+  visible, it is the target workspace for the Apple Music window.
 - Clicking the artwork or title always brings the player window into view.
 - Scrolling the bar icon changes track.
 - The music-note icon becomes a small equalizer during playback.

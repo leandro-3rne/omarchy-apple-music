@@ -34,6 +34,10 @@ Item {
   property bool windowWorkspaceVisible: false
   property bool windowKnownOpen: false
   property bool launching: false
+  // Preserve the focused group across Chromium startup. Once the new window
+  // maps, control.sh adds only Apple Music to that exact group.
+  property string launchGroupTargetAddress: ""
+  property bool launchCommandStarted: false
   property string pendingIntent: ""
   property string lastError: ""
 
@@ -99,7 +103,10 @@ Item {
   // is a harmless no-op.
   function showWindow() {
     if (!controlPath || !windowAddress) return
-    Quickshell.execDetached(["bash", controlPath, "show", windowAddress])
+    var command = ["bash", controlPath, "show", windowAddress]
+    if (launchGroupTargetAddress) command.push(launchGroupTargetAddress)
+    launchGroupTargetAddress = ""
+    Quickshell.execDetached(command)
   }
 
   // The right-click action once a window already exists: hide only Apple
@@ -122,7 +129,16 @@ Item {
     // for track-to-track gaps in the previous Apple Music session.
     clearDisplayedMetadata()
     launching = true
+    launchGroupTargetAddress = ""
+    launchCommandStarted = false
     lastError = ""
+    launchTargetProc.command = ["hyprctl", "-j", "activewindow"]
+    launchTargetProc.running = true
+  }
+
+  function startLaunch() {
+    if (!launching || launchCommandStarted) return
+    launchCommandStarted = true
     Quickshell.execDetached(["bash", controlPath, "launch"])
     launchPoll.attempts = 0
     launchPoll.restart()
@@ -150,6 +166,8 @@ Item {
     windowWorkspace = ""
     windowWorkspaceVisible = false
     browserPid = 0
+    launchGroupTargetAddress = ""
+    launchCommandStarted = false
     clearDisplayedMetadata()
   }
 
@@ -174,6 +192,24 @@ Item {
     }
   }
 
+  // Read the focused window before launching. The active window changes to
+  // Chromium as soon as it maps, so looking it up later would lose the group
+  // the user had focused when they invoked Apple Music.
+  Process {
+    id: launchTargetProc
+    stdout: StdioCollector {
+      onStreamFinished: {
+        var active = {}
+        try { active = JSON.parse(String(text || "{}")) } catch (e) { active = {} }
+        var grouped = active && active.grouped
+        if (Array.isArray(grouped) && grouped.length > 1 && active.address)
+          root.launchGroupTargetAddress = String(active.address)
+        root.startLaunch()
+      }
+    }
+    onExited: function() { Qt.callLater(function() { root.startLaunch() }) }
+  }
+
   Timer {
     id: launchPoll
     interval: 250
@@ -184,6 +220,8 @@ Item {
       if (attempts > 40) {
         stop()
         root.launching = false
+        root.launchGroupTargetAddress = ""
+        root.launchCommandStarted = false
         root.lastError = "Chromium did not create the Apple Music window"
         Quickshell.execDetached(["omarchy-notification-send", "Apple Music", root.lastError])
         return
