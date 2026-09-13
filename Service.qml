@@ -88,7 +88,9 @@ Item {
     }
   }
 
-  // Pops the window onto the current workspace and focuses it. Classic
+  // Pops the window onto the current workspace and focuses it. A hidden
+  // special workspace is never revealed; Apple Music is detached on its own
+  // first and joins the currently focused group when there is one. Classic
   // dispatch strings ("movetoworkspace ...") aren't reliably honored by
   // this Hyprland build, whether issued via Hyprland.dispatch() or the
   // hyprctl CLI; control.sh's "show" goes through hl.dsp.* via `hyprctl
@@ -100,9 +102,9 @@ Item {
     Quickshell.execDetached(["bash", controlPath, "show", windowAddress])
   }
 
-  // The right-click action once a window already exists: hide it (parked on
-  // a special workspace, playback and the session keep going) if it's on
-  // the workspace currently in view, otherwise bring it into view.
+  // The right-click action once a window already exists: hide only Apple
+  // Music (parked on its special workspace, playback and the session keep
+  // going) if it's currently in view, otherwise bring it into view.
   // control.sh checks the window's *workspace*, not which window has input
   // focus — Omarchy runs with input:follow_mouse, so the pointer travelling
   // from this window to the bar icon crosses other windows on the way and

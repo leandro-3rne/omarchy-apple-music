@@ -211,11 +211,10 @@ launch() {
     "$launch_url"
 }
 
-# Shows and focuses the window. A window intentionally placed on a normal
-# special workspace such as the scratchpad stays there: the workspace is
-# revealed if necessary instead of pulling Apple Music out of it. A window
-# parked on our own hidden workspace moves to the focused window's workspace;
-# if that focused window belongs to a group, Apple Music joins that group.
+# Shows and focuses the window. Apple Music is never revealed by opening a
+# special workspace: whether it was parked on the plugin workspace or left on
+# a hidden scratchpad, it moves into the currently focused workspace instead.
+# If the focused window belongs to a group, Apple Music joins that group.
 # Classic dispatch strings ("movetoworkspace ...") are not reliably honored
 # by this Hyprland build, whether issued via the hyprctl CLI or Quickshell's
 # Hyprland.dispatch(); hl.dsp.* via `hyprctl eval` is the mechanism that
@@ -229,55 +228,28 @@ launch() {
 show_window() {
   local address=$1
   [[ $address =~ ^0x[0-9a-fA-F]+$ ]] || { echo "invalid address: $address" >&2; exit 2; }
+  # A workspace move is group-aware. Detach Apple Music first so selecting it
+  # from Alt-Tab can never drag the rest of a hidden scratchpad group along.
+  hyprctl eval "
+    local w = hl.get_window(\"address:$address\")
+    if w and w.group then
+      hl.dispatch(hl.dsp.window.move({ window = w, out_of_group = true }))
+    end
+  "
   hyprctl eval "
     local w = hl.get_window(\"address:$address\")
     if not w then error(\"Apple Music window disappeared\") end
     local cursor = hl.get_cursor_pos()
-    local source_ws = w.workspace
-
-    local parked = source_ws and (source_ws.name == \"$SPECIAL_WORKSPACE\" or source_ws.name == \"$LEGACY_SPECIAL_WORKSPACE\")
-    if source_ws and source_ws.special and not parked then
-      if not source_ws.visible then
-        local special_name = source_ws.name:gsub(\"^special:\", \"\")
-        hl.dispatch(hl.dsp.workspace.toggle_special(special_name))
-      end
-    else
-      local target = hl.get_active_window()
-      local target_group = target and target.group or nil
-      local target_ws = target and target.workspace or hl.get_active_workspace()
-      if target_ws and target_ws.name then
-        hl.dispatch(hl.dsp.window.move({ window = w, workspace = target_ws.name, follow = false }))
-      end
-      if parked and target_group then
-        target_group:add(w)
-      end
+    local target = hl.get_active_window()
+    local target_group = target and target.group or nil
+    local target_ws = target and target.workspace or hl.get_active_workspace()
+    if target_ws and target_ws.name then
+      hl.dispatch(hl.dsp.window.move({ window = w, workspace = target_ws.name, follow = false }))
+    end
+    if target_group and w.group ~= target_group then
+      target_group:add(w)
     end
     hl.dispatch(hl.dsp.focus({ window = w }))
-    if cursor and cursor.x and cursor.y then
-      hl.dispatch(hl.dsp.cursor.move({ x = math.floor(cursor.x), y = math.floor(cursor.y) }))
-    end
-  "
-}
-
-# Scratchpad and other user-selected special workspaces keep their native
-# show/hide behavior. Toggling them never relocates Apple Music to the
-# plugin's private parking workspace.
-toggle_special_window() {
-  local address=$1
-  [[ $address =~ ^0x[0-9a-fA-F]+$ ]] || { echo "invalid address: $address" >&2; exit 2; }
-  hyprctl eval "
-    local w = hl.get_window(\"address:$address\")
-    local ws = w and w.workspace or nil
-    if not ws or not ws.special or ws.name == \"$SPECIAL_WORKSPACE\" or ws.name == \"$LEGACY_SPECIAL_WORKSPACE\" then
-      error(\"Apple Music is not on a user special workspace\")
-    end
-    local cursor = hl.get_cursor_pos()
-    local was_visible = ws.visible
-    local special_name = ws.name:gsub(\"^special:\", \"\")
-    hl.dispatch(hl.dsp.workspace.toggle_special(special_name))
-    if not was_visible then
-      hl.dispatch(hl.dsp.focus({ window = w }))
-    end
     if cursor and cursor.x and cursor.y then
       hl.dispatch(hl.dsp.cursor.move({ x = math.floor(cursor.x), y = math.floor(cursor.y) }))
     end
@@ -293,12 +265,18 @@ toggle_special_window() {
 hide_window() {
   local address=$1
   [[ $address =~ ^0x[0-9a-fA-F]+$ ]] || { echo "invalid address: $address" >&2; exit 2; }
+  # Detaching and moving in a single Lua evaluation lets the workspace move
+  # observe the old group on this Hyprland build. Complete the detach first,
+  # then resolve the window again for the workspace move.
   hyprctl eval "
-    local cursor = hl.get_cursor_pos()
     local w = hl.get_window(\"address:$address\")
     if w and w.group then
       hl.dispatch(hl.dsp.window.move({ window = w, out_of_group = true }))
     end
+  "
+  hyprctl eval "
+    local cursor = hl.get_cursor_pos()
+    local w = hl.get_window(\"address:$address\")
     hl.dispatch(hl.dsp.window.move({ window = w or \"address:$address\", workspace = \"$SPECIAL_WORKSPACE\", follow = false }))
     if cursor and cursor.x and cursor.y then
       hl.dispatch(hl.dsp.cursor.move({ x = math.floor(cursor.x), y = math.floor(cursor.y) }))
@@ -321,7 +299,7 @@ hide_window() {
 # the same output, so it stays an accurate proxy for "is the user looking at
 # this window right now."
 toggle_window() {
-  local current addr workspace active_ws
+  local current addr workspace visible active_ws
   current=$(state)
   if [[ $(jq -r '.open' <<<"$current") != "true" ]]; then
     launch
@@ -330,6 +308,7 @@ toggle_window() {
 
   addr=$(jq -r '.address' <<<"$current")
   workspace=$(jq -r '.workspace' <<<"$current")
+  visible=$(jq -r '.visible' <<<"$current")
 
   if [[ $workspace == "$SPECIAL_WORKSPACE" || $workspace == "$LEGACY_SPECIAL_WORKSPACE" ]]; then
     show_window "$addr"
@@ -337,7 +316,11 @@ toggle_window() {
   fi
 
   if [[ $workspace == special:* ]]; then
-    toggle_special_window "$addr"
+    if [[ $visible == true ]]; then
+      hide_window "$addr"
+    else
+      show_window "$addr"
+    fi
     return
   fi
 

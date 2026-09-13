@@ -36,8 +36,9 @@ licensing. See [Credits](#credits) and [LICENSE](LICENSE).
   belongs to a Hyprland group, hiding detaches and moves only Apple Music while
   the other group members remain on their workspace. Opening it again joins
   the currently focused group, when there is one.
-- Apple Music can live on the regular Hyprland scratchpad: Open/Hide reveals
-  and hides that scratchpad without pulling the window out of it.
+- Hiding Apple Music from a visible scratchpad detaches and parks only its
+  window; the scratchpad and the rest of its group stay visible. Opening it
+  again moves it into the current workspace and current group, when present.
 - Clicking the artwork or title always brings the player window into view.
 - Scrolling the bar icon changes track.
 - The music-note icon becomes a small equalizer during playback.
