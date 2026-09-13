@@ -317,8 +317,21 @@ show_window() {
 # position too, defensively matching show_window, in case moving a window
 # across workspaces has the same pointer-warping side effect.
 hide_window() {
-  local address=$1
+  local address=$1 source_workspace source_was_scratchpad=false remaining_scratchpad
   [[ $address =~ ^0x[0-9a-fA-F]+$ ]] || { echo "invalid address: $address" >&2; exit 2; }
+  # Remember whether this exact window was the visible Scratchpad window. If
+  # it is the last one there, the special workspace can no longer carry that
+  # context after we park Apple Music. Leave the switcher's persistent empty
+  # hint in place so the next open returns Apple Music to the Scratchpad
+  # instead of falling through to the hidden Apple Music parking workspace.
+  source_workspace=$(hyprctl -j clients 2>/dev/null | jq -r --arg address "$address" '
+    first(.[] | select(.address == $address)) | .workspace.name // empty
+  ' 2>/dev/null || true)
+  if [[ $source_workspace == "special:scratchpad" ]]; then
+    if hyprctl -j monitors 2>/dev/null | jq -e 'any(.[]; .specialWorkspace.name == "special:scratchpad")' >/dev/null 2>&1; then
+      source_was_scratchpad=true
+    fi
+  fi
   # Detaching and moving in a single Lua evaluation lets the workspace move
   # observe the old group on this Hyprland build. Complete the detach first,
   # then resolve the window again for the workspace move.
@@ -336,6 +349,17 @@ hide_window() {
       hl.dispatch(hl.dsp.cursor.move({ x = math.floor(cursor.x), y = math.floor(cursor.y) }))
     end
   "
+  if [[ $source_was_scratchpad == true ]]; then
+    # Dispatches are asynchronous. Check for another Scratchpad client after
+    # the move; only show the empty hint when Apple Music was the last one, so
+    # a non-empty Scratchpad keeps its normal presentation untouched.
+    remaining_scratchpad=$(hyprctl -j clients 2>/dev/null | jq -r --arg address "$address" '
+      any(.[]; .workspace.name == "special:scratchpad" and .address != $address)
+    ' 2>/dev/null || printf 'false')
+    if [[ $remaining_scratchpad != true ]]; then
+      omarchy-shell shell call io.github.leandro-3rne.window-switcher showScratchpadEmpty '{}' >/dev/null 2>&1 || true
+    fi
+  fi
 }
 
 # The bar icon's one right-click action: launch if not running, hide if our
