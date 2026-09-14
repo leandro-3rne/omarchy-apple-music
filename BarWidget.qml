@@ -334,7 +334,7 @@ BarWidget {
               // Keep the decoded cover while the popup is closed. The source
               // only changes with the track, so Qt can show the same artwork
               // immediately on reopen instead of briefly exposing the dark
-              // placeholder while it decodes/downloads the 1500 px image.
+              // placeholder while it decodes/downloads the 1024 px image.
               cache: true
               source: root.service ? (root.service.artUrl || "") : ""
               // Shown only once there is a decoded image to show, so a file
@@ -350,8 +350,8 @@ BarWidget {
               anchors.margins: Style.space(5)
               fillMode: Image.PreserveAspectCrop
               asynchronous: true
-              sourceSize.width: 1500
-              sourceSize.height: 1500
+              sourceSize.width: 1024
+              sourceSize.height: 1024
               cache: true
               source: root.service ? (root.service.highResArtUrl || "") : ""
               // This layer replaces the quick local thumbnail only after it
