@@ -40,6 +40,7 @@ Item {
   property bool launchCommandStarted: false
   property string pendingIntent: ""
   property string lastError: ""
+  property int postActionSyncAttempts: 0
 
   // windowKnownOpen only means the process exists — it stays true after
   // hiding, since that just parks the window rather than closing it. Real
@@ -48,6 +49,15 @@ Item {
   readonly property bool windowVisible: windowKnownOpen && windowWorkspaceVisible
 
   function refresh() { requestState("sync") }
+
+  // Window actions run detached so they never block the shell. Re-read the
+  // resulting Hyprland state for a short time afterwards: otherwise the
+  // service keeps the pre-action visibility until the popover is reopened,
+  // making an open window look unrecognised (and the Open/Hide label stale).
+  function syncAfterWindowAction() {
+    postActionSyncAttempts = 0
+    postActionSync.restart()
+  }
 
   function requestState(intent) {
     if (!controlPath) return
@@ -107,6 +117,7 @@ Item {
     if (launchGroupTargetAddress) command.push(launchGroupTargetAddress)
     launchGroupTargetAddress = ""
     Quickshell.execDetached(command)
+    syncAfterWindowAction()
   }
 
   // The right-click action once a window already exists: hide only Apple
@@ -121,6 +132,7 @@ Item {
   function toggleVisibility() {
     if (!controlPath) return
     Quickshell.execDetached(["bash", controlPath, "toggle"])
+    syncAfterWindowAction()
   }
 
   function launchWindow() {
@@ -189,6 +201,17 @@ Item {
         root.lastError = "Could not read Hyprland window state"
         Quickshell.execDetached(["omarchy-notification-send", "Apple Music", root.lastError])
       }
+    }
+  }
+
+  Timer {
+    id: postActionSync
+    interval: 250
+    repeat: true
+    onTriggered: {
+      root.postActionSyncAttempts++
+      root.requestState("sync")
+      if (root.postActionSyncAttempts >= 6) stop()
     }
   }
 
