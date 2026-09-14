@@ -7,9 +7,23 @@ BarWidget {
   id: root
   moduleName: "io.github.leandro-3rne.apple-music"
 
-  readonly property var service: bar && bar.shell && typeof bar.shell.serviceFor === "function"
+  readonly property var hostService: bar && bar.shell && typeof bar.shell.serviceFor === "function"
     ? bar.shell.serviceFor("io.github.leandro-3rne.apple-music")
     : null
+  // Omarchy deliberately gives widgets hosted by a third-party replacement
+  // bar a service-less facade. Keep the normal shared service in the trusted
+  // stock bar, but provide the same view locally when this widget is hosted
+  // by a cloned bar such as leand.bar. IPC stays owned by the singleton.
+  readonly property var service: hostService || fallbackServiceLoader.item
+
+  Loader {
+    id: fallbackServiceLoader
+    active: !root.hostService
+    visible: false
+    sourceComponent: Component {
+      Service { manageIpc: false }
+    }
+  }
 
   readonly property bool hasMedia: service ? service.hasMedia : false
   readonly property bool playing: service ? service.playing : false

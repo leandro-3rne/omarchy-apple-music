@@ -16,6 +16,7 @@ Item {
   property var shell: null
   property var manifest: null
   property var pluginRegistry: null
+  property bool manageIpc: true
 
   // Third-party manifests intentionally hide __sourceDir from plugins. Resolve
   // the helper relative to this QML component instead, so the browser control
@@ -935,6 +936,7 @@ Item {
   }
 
   IpcHandler {
+    enabled: root.manageIpc
     // A generic target like "apple-music" could collide with another
     // installed plugin's IPC handler, so this uses the full, namespaced
     // plugin id instead.
