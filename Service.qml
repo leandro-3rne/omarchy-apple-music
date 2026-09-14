@@ -565,7 +565,7 @@ Item {
       root.albumCollectionCache[wantedAlbum] = collectionId
     var art = String(item.artworkUrl100 || item.artworkUrl60 || "")
     if (art !== "") {
-      var largeArt = art.replace(/\/(?:100|60)x(?:100|60)bb\./, "/1200x1200bb.")
+      var largeArt = art.replace(/\/(?:100|60)x(?:100|60)bb\./, "/1500x1500bb.")
       root.highResArtUrl = largeArt
       catalogRetry.stop()
       root.catalogRetryAttempt = 0
