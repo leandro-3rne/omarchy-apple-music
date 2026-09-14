@@ -21,7 +21,13 @@ BarWidget {
     active: !root.hostService
     visible: false
     sourceComponent: Component {
-      Service { manageIpc: false }
+      Service {
+        manageIpc: false
+        // A cloned bar creates one widget per monitor. Only the popup the user
+        // actually opened needs its own catalog request; hidden copies keep
+        // the quick local thumbnail without multiplying network traffic.
+        catalogLookupEnabled: root.popoverOpen
+      }
     }
   }
 

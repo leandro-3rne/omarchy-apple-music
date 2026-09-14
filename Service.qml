@@ -450,6 +450,8 @@ Item {
   property string highResArtUrl: ""
   property double catalogLength: 0
   property bool catalogLookupRunning: false
+  property bool catalogLookupEnabled: true
+  property int catalogRetryAttempt: 0
   // Every track on an album normally shares one catalog artwork URL. Keep
   // successful resolutions for this shell session so one well-indexed track
   // can immediately provide sharp art to its harder-to-find neighbours.
@@ -470,6 +472,11 @@ Item {
     var trackKey = albumKey + "\n" + normalizedCatalogText(title)
     highResArtUrl = albumKey !== "" ? String(albumArtCache[albumKey] || "") : ""
     catalogLength = Number(trackLengthCache[trackKey] || 0)
+    if (!catalogLookupEnabled) {
+      catalogLookupRunning = false
+      return
+    }
+    if (highResArtUrl !== "") catalogRetry.stop()
     if (!title || !artist || lookupProc.running || albumSearchProc.running || collectionProc.running) return
     catalogLookupRunning = true
     var cachedCollectionId = Number(albumCollectionCache[albumKey] || 0)
@@ -479,7 +486,7 @@ Item {
     }
     lookupProc.__lookupKey = artworkLookupKey
     lookupProc.command = [
-      "curl", "-fsSL", "--connect-timeout", "2", "--max-time", "5", "--get",
+      "curl", "-fsSL", "--connect-timeout", "4", "--max-time", "12", "--get",
       // Apple's search often returns nothing when every collaborator from
       // MPRIS is included. The first credit is the release's lead artist;
       // album/title verification below still decides whether a result is safe.
@@ -491,7 +498,40 @@ Item {
     lookupProc.running = true
   }
 
-  onArtworkLookupKeyChanged: lookupArtwork()
+  onArtworkLookupKeyChanged: {
+    catalogRetry.stop()
+    catalogRetryAttempt = 0
+    lookupArtwork()
+  }
+
+  onCatalogLookupEnabledChanged: {
+    if (!catalogLookupEnabled) {
+      catalogRetry.stop()
+      catalogLookupRunning = false
+      return
+    }
+    catalogRetryAttempt = 0
+    lookupArtwork()
+  }
+
+  function scheduleCatalogRetry(key) {
+    if (!catalogLookupEnabled || key !== artworkLookupKey || highResArtUrl !== ""
+        || !title || !artist || catalogRetryAttempt >= 3) return
+    catalogRetryAttempt++
+    catalogRetry.__lookupKey = key
+    catalogRetry.interval = 1000 * Math.pow(2, catalogRetryAttempt - 1)
+    catalogRetry.restart()
+  }
+
+  Timer {
+    id: catalogRetry
+    property string __lookupKey: ""
+    repeat: false
+    onTriggered: {
+      if (__lookupKey === root.artworkLookupKey && root.catalogLookupEnabled)
+        root.lookupArtwork()
+    }
+  }
 
   function normalizedCatalogText(value) {
     return String(value || "").toLowerCase()
@@ -527,6 +567,8 @@ Item {
     if (art !== "") {
       var largeArt = art.replace(/\/(?:100|60)x(?:100|60)bb\./, "/1200x1200bb.")
       root.highResArtUrl = largeArt
+      catalogRetry.stop()
+      root.catalogRetryAttempt = 0
       if (wantedAlbum !== "") root.albumArtCache[wantedAlbum] = largeArt
     }
     return true
@@ -601,7 +643,7 @@ Item {
   function startCollectionLookup(collectionId, key) {
     collectionProc.__lookupKey = key
     collectionProc.command = [
-      "curl", "-fsSL", "--connect-timeout", "2", "--max-time", "5", "--get",
+      "curl", "-fsSL", "--connect-timeout", "4", "--max-time", "12", "--get",
       "--data-urlencode", "id=" + collectionId,
       "--data-urlencode", "entity=song",
       "https://itunes.apple.com/lookup"
@@ -613,7 +655,7 @@ Item {
     if (!album) return false
     albumSearchProc.__lookupKey = key
     albumSearchProc.command = [
-      "curl", "-fsSL", "--connect-timeout", "2", "--max-time", "5", "--get",
+      "curl", "-fsSL", "--connect-timeout", "4", "--max-time", "12", "--get",
       "--data-urlencode", "term=" + album,
       "--data-urlencode", "entity=album",
       "--data-urlencode", "limit=20",
@@ -659,8 +701,10 @@ Item {
     }
     onExited: {
       if (__lookupKey === root.artworkLookupKey
-          && !albumSearchProc.running && !collectionProc.running)
+          && !albumSearchProc.running && !collectionProc.running) {
         root.catalogLookupRunning = false
+        root.scheduleCatalogRetry(__lookupKey)
+      }
       // lookupArtwork() deliberately does not start a second Process while
       // one is running. If the song changed in flight, launch the queued
       // lookup now so its cover and duration do not stay empty.
@@ -683,9 +727,10 @@ Item {
       }
     }
     onExited: {
-      if (__lookupKey === root.artworkLookupKey && !collectionProc.running)
+      if (__lookupKey === root.artworkLookupKey && !collectionProc.running) {
         root.catalogLookupRunning = false
-      else if (__lookupKey !== root.artworkLookupKey) Qt.callLater(root.lookupArtwork)
+        root.scheduleCatalogRetry(__lookupKey)
+      } else if (__lookupKey !== root.artworkLookupKey) Qt.callLater(root.lookupArtwork)
     }
   }
 
@@ -703,7 +748,10 @@ Item {
       }
     }
     onExited: {
-      if (__lookupKey === root.artworkLookupKey) root.catalogLookupRunning = false
+      if (__lookupKey === root.artworkLookupKey) {
+        root.catalogLookupRunning = false
+        root.scheduleCatalogRetry(__lookupKey)
+      }
       else Qt.callLater(root.lookupArtwork)
     }
   }
