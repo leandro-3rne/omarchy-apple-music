@@ -449,7 +449,9 @@ import sys
 ceiling = int(sys.argv[1])
 mode = sys.argv[2]
 PREFIX = "art."
-SNAPSHOT_NAME = re.compile(r"^art\.[0-9a-f]{16}$")
+OWNER_NAME = re.compile(r"^[0-9a-f]{9,32}$")
+SNAPSHOT_NAME = re.compile(r"^art\.([0-9a-f]{9,32})\.[0-9a-f]{16}$")
+LEGACY_SNAPSHOT_NAME = re.compile(r"^art\.[0-9a-f]{16}$")
 BASE = "leandro-3rne-apple-music"
 ART = "art"
 
@@ -501,6 +503,12 @@ try:
 except OSError:
     sys.exit(1)
 
+owner = None
+if mode != "clear":
+    owner = sys.argv[3]
+    if not OWNER_NAME.fullmatch(owner):
+        sys.exit(1)
+
 base_fd = art_fd = None
 try:
     if mode == "clear":
@@ -518,12 +526,15 @@ try:
             # that name; leave it alone and go without artwork.
             sys.exit(1)
 
-    # Only ever removes names this plugin writes, so nothing another program
-    # put here is touched. A directory cannot be unlinked, so one wearing our
-    # naming is taken away as a directory instead of being left to block the
-    # tidy-up below.
+    # A replacement bar can host several independent Service instances. During
+    # a snapshot, remove only this instance's previous file; otherwise one bar
+    # can delete artwork that another bar is still decoding or displaying.
+    # A full clear still removes every current and legacy plugin snapshot.
     for name in os.listdir(art_fd):
-        if not SNAPSHOT_NAME.match(name):
+        match = SNAPSHOT_NAME.fullmatch(name)
+        removable = (mode == "clear" and (match or LEGACY_SNAPSHOT_NAME.fullmatch(name))) \
+            or (mode != "clear" and match and match.group(1) == owner)
+        if not removable:
             continue
         try:
             os.unlink(name, dir_fd=art_fd)
@@ -550,7 +561,7 @@ try:
             pass
         sys.exit(0)
 
-    src = sys.argv[3]
+    src = sys.argv[4]
     try:
         src_fd = os.open(src, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK)
     except OSError:
@@ -580,7 +591,7 @@ try:
             or (data[:4] == b"RIFF" and data[8:12] == b"WEBP")):
         sys.exit(1)
 
-    name = PREFIX + secrets.token_hex(8)
+    name = PREFIX + owner + "." + secrets.token_hex(8)
     out_fd = os.open(name, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW,
                      0o600, dir_fd=art_fd)
     try:
@@ -603,9 +614,10 @@ PY
 }
 
 snapshot_art() {
-  local src=$1
+  local owner=$1 src=$2
+  [[ $owner =~ ^[0-9a-f]{9,32}$ ]] || return 1
   [[ $src =~ ^/tmp/\.org\.chromium\.Chromium\.[A-Za-z0-9]+$ ]] || return 1
-  art_helper snapshot "$src"
+  art_helper snapshot "$owner" "$src"
 }
 
 clear_art() {
@@ -695,8 +707,8 @@ toggle) toggle_window ;;
 close) close_window ;;
 quit) quit_window ;;
 art)
-  (( $# == 2 )) || { echo "usage: $0 art <path>" >&2; exit 2; }
-  snapshot_art "$2" || exit 1
+  (( $# == 3 )) || { echo "usage: $0 art <owner> <path>" >&2; exit 2; }
+  snapshot_art "$2" "$3" || exit 1
   ;;
 storefront)
   (( $# == 2 )) || { echo "usage: $0 storefront <country-code>" >&2; exit 2; }

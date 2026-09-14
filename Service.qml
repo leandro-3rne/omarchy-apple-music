@@ -17,6 +17,11 @@ Item {
   property var manifest: null
   property var pluginRegistry: null
   property bool manageIpc: true
+  // Replacement bars create one fallback service per widget instance. Give
+  // each service its own artwork namespace so their snapshot helpers cannot
+  // remove files that another bar is still displaying.
+  readonly property string artOwner: Date.now().toString(16)
+    + Math.floor(Math.random() * 0x100000000).toString(16)
 
   // Third-party manifests intentionally hide __sourceDir from plugins. Resolve
   // the helper relative to this QML component instead, so the browser control
@@ -768,7 +773,7 @@ Item {
     if ((!rawTitle && !rawArtist) || artCandidate === "" || !controlPath || artProc.running) return
     artUrl = ""
     artProc.__candidate = artCandidate
-    artProc.command = ["bash", controlPath, "art", artCandidate]
+    artProc.command = ["bash", controlPath, "art", artOwner, artCandidate]
     artProc.running = true
   }
 

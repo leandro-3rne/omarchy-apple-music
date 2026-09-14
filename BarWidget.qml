@@ -361,7 +361,7 @@ BarWidget {
               visible: !localArtImage.visible && !catalogArtImage.visible
               text: root.service && root.service.artLoading
                 ? "Song loading...✌️🥀"
-                : "To broke for a cover image✌️🥀"
+                : "Too broke for a cover image✌️🥀"
               textFormat: Text.PlainText
               color: root.bar.foreground
               font.family: root.bar.fontFamily
